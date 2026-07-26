@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protocol_runtime"
+version = "1.0.0"
+description = "Protocol-Governed Computing — protocol runtime: executes a compiled snapshot as governed DAG traversal, emits traces (import package: runtime)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+license = "Apache-2.0"
+
+authors = [
+  { name = "Bhash Ganti aka Bachi" }
+]
+
+dependencies = []
+
+keywords = ["protocol-governed-computing", "pgc", "protocol", "runtime", "workflow", "execution"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent"
+]
+
+[project.urls]
+Homepage = "https://github.com/bachipeachy/protocol_runtime"
+Repository = "https://github.com/bachipeachy/protocol_runtime"
+
+[project.scripts]
+pgc_runtime = "runtime.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["runtime*"]
+exclude = ["testbed*", "scripts*", "*.tests"]
