@@ -11,7 +11,7 @@
 # Env overrides:
 #   PGC_SNAPSHOT_ROOT   assembled snapshot dir (default: sibling ../snapshot)
 #   PGC_IMPL_ROOTS      colon-separated roots on PYTHONPATH for domain CT/CS impl imports
-#                       (default: sibling ../platform, where reference workloads live)
+#                       (default: ../software_governance:../conformance_workloads)
 #   PYTHON              (default: python)
 #
 set -euo pipefail
@@ -21,9 +21,10 @@ UMBRELLA="$(cd "$SCRIPT_DIR/.." && pwd)"                       # protocol-govern
 PYTHON="${PYTHON:-python}"
 
 # Domain CT/CS implementations are imported by handler_ref module path at execution; their roots go
-# on PYTHONPATH (env-provisioned — the runtime never manipulates sys.path). Default: the platform
-# repo, which hosts reference workloads (e.g. reference_workloads.collatz.implementation.*).
-IMPL_ROOTS="${PGC_IMPL_ROOTS:-$UMBRELLA/platform}"
+# on PYTHONPATH (env-provisioned — the runtime never manipulates sys.path). Default: both source
+# repos — software_governance (capability_side_effects.*, capability_transforms.*) and
+# conformance_workloads (workloads.collatz.implementation.*).
+IMPL_ROOTS="${PGC_IMPL_ROOTS:-$UMBRELLA/software_governance:$UMBRELLA/conformance_workloads}"
 
 export PYTHONPATH="$SCRIPT_DIR:$IMPL_ROOTS${PYTHONPATH:+:$PYTHONPATH}"
 export PGC_SNAPSHOT_ROOT="${PGC_SNAPSHOT_ROOT:-$UMBRELLA/snapshot}"
