@@ -36,8 +36,8 @@ _REQUIRED_PAYLOAD: dict[str, tuple[str, ...]] = {
     "node_end": ("node_id", "status", "duration_ms"),
     "workflow_complete": ("status", "duration_ms", "exit_condition", "exit_reason_code"),
     "capability_dispatch": ("cc_code", "node_id"),
-    "transform_start": ("ct_code",),
-    "transform_end": ("ct_code", "duration_ms"),
+    "transform_start": ("artifact_code",),
+    "transform_end": ("artifact_code", "duration_ms"),
     "context_snapshot": ("context_hash", "sequence"),
     "error": ("error_code", "message", "node_category"),
 }

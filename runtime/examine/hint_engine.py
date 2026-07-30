@@ -121,9 +121,9 @@ def _hint_ct_error(
     target = f" — check {artifact_path}" if artifact_path else ""
 
     if error_code == "CT_ARTIFACT_NOT_FOUND":
-        ct_code = _extract_ct_code_from_result(result)
-        if ct_code:
-            return f"CT artifact '{ct_code}' not found{target}. Run build or check atom registration"
+        artifact_code = _extract_ct_code_from_result(result)
+        if artifact_code:
+            return f"CT artifact '{artifact_code}' not found{target}. Run build or check atom registration"
         return f"CT artifact not found for {node_id}{target}. Run build or check atom registration"
 
     if error_code == "CT_VALIDATION_FAILED":
@@ -230,8 +230,8 @@ def _extract_ct_code_from_result(result: ClassificationResult) -> str:
         return ""
     p = _payload(result.root_event)
     details = p.get("details", {})
-    if isinstance(details, dict) and "ct_code" in details:
-        return details["ct_code"]
+    if isinstance(details, dict) and "artifact_code" in details:
+        return details["artifact_code"]
     node_id = p.get("node_id", "")
     if node_id.startswith("CT_"):
         return node_id

@@ -110,9 +110,9 @@ def locate_artifact(
     if result.failure_class == FailureClass.CT_STRUCTURE_ERROR:
         error_code = result.error_code
         if error_code in ("CT_ARTIFACT_NOT_FOUND", "CT_VALIDATION_FAILED", "CT_EXECUTION_FAILED"):
-            ct_code = _extract_ct_code(result)
-            if ct_code:
-                return _find_artifact(snapshot_root, "capability_transforms", ct_code)
+            artifact_code = _extract_ct_code(result)
+            if artifact_code:
+                return _find_artifact(snapshot_root, "capability_transforms", artifact_code)
         if node_id.startswith("CC_"):
             return _find_artifact(snapshot_root, "capability_contracts", node_id)
         return _find_artifact(snapshot_root, "workflows", trace.workflow_code)
@@ -140,8 +140,8 @@ def _extract_ct_code(result: ClassificationResult) -> str | None:
         return None
     p = _payload(result.root_event)
     details = p.get("details", {})
-    if isinstance(details, dict) and "ct_code" in details:
-        return details["ct_code"]
+    if isinstance(details, dict) and "artifact_code" in details:
+        return details["artifact_code"]
     node_id = p.get("node_id", "")
     if node_id.startswith("CT_"):
         return node_id
