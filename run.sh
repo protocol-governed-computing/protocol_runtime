@@ -22,9 +22,10 @@ PYTHON="${PYTHON:-python}"
 
 # Domain CT/CS implementations are imported by handler_ref module path at execution; their roots go
 # on PYTHONPATH (env-provisioned — the runtime never manipulates sys.path). Default: both source
-# repos — software_governance (capability_side_effects.*, capability_transforms.*) and
-# conformance_workloads (workloads.collatz.implementation.*).
-IMPL_ROOTS="${PGC_IMPL_ROOTS:-$UMBRELLA/software_governance:$UMBRELLA/conformance_workloads}"
+# repos — software_governance (capability_side_effects.*, capability_transforms.*),
+# conformance_workloads (workloads.collatz.implementation.*) and business_domains
+# (ai_governance.implementation.*).
+IMPL_ROOTS="${PGC_IMPL_ROOTS:-$UMBRELLA/software_governance:$UMBRELLA/conformance_workloads:$UMBRELLA/business_domains}"
 
 export PYTHONPATH="$SCRIPT_DIR:$IMPL_ROOTS${PYTHONPATH:+:$PYTHONPATH}"
 export PGC_SNAPSHOT_ROOT="${PGC_SNAPSHOT_ROOT:-$UMBRELLA/snapshot}"
