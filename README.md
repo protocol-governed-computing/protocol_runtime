@@ -58,13 +58,13 @@ data/
 ## CLI surface
 
 ```bash
-pgc_runtime run \
+protocol_runtime run \
   --wf blockchain::WF_REGISTER_ACTOR_UNVERIFIED_V0 \
   --payload payload.json \
   --data-root /abs/path/to/pgs_workspace/data \
   --workspace /abs/path/to/pgs_workspace
 
-pgc_runtime examine ./traces/<TRACE_ID>/<TRACE_ID>.jsonl
+protocol_runtime examine ./traces/<TRACE_ID>/<TRACE_ID>.jsonl
 
 # module form (no install): PYTHONPATH=<protocol_runtime> python -m runtime.cli run ...
 ```
@@ -85,7 +85,7 @@ You run a workflow. The runtime:
 
 No logic exists in the runtime for any specific workflow.
 
-**Example:** `pgc_runtime run --wf blockchain::WF_REGISTER_ACTOR_UNVERIFIED_V0 ...`
+**Example:** `protocol_runtime run --wf blockchain::WF_REGISTER_ACTOR_UNVERIFIED_V0 ...`
 
 The runtime has no knowledge of blockchain. It only traverses the precomputed graph compiled from that workflow's protocol declaration.
 
