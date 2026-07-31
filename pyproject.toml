@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "protocol_runtime"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Protocol-Governed Computing — protocol runtime: executes a compiled snapshot as governed DAG traversal, emits traces (import package: runtime)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,3 +43,6 @@ include-package-data = false
 where = ["."]
 include = ["runtime*"]
 exclude = ["testbed*", "scripts*", "*.tests"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
