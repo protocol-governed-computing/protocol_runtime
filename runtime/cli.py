@@ -38,7 +38,7 @@ from runtime.boot import boot, default_snapshot_root
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="runtime",
+        prog="protocol_runtime",
         description="PGC token-native workflow runtime — warm-boots and executes an assembled snapshot",
     )
     subs = parser.add_subparsers(dest="command", required=True)

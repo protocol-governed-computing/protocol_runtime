@@ -34,7 +34,7 @@ Homepage = "https://github.com/bachipeachy/protocol_runtime"
 Repository = "https://github.com/bachipeachy/protocol_runtime"
 
 [project.scripts]
-pgc_runtime = "runtime.cli:main"
+protocol_runtime = "runtime.cli:main"
 
 [tool.setuptools]
 include-package-data = false
