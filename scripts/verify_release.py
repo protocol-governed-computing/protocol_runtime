@@ -27,7 +27,10 @@ PKG_DIR = RUNTIME_ROOT / "runtime"
 WORKSPACE = RUNTIME_ROOT.parent
 
 SNAPSHOT_ROOT = WORKSPACE / "snapshot"      # assembled PGC snapshot (runtime input, read-only)
-IMPL_ROOTS = WORKSPACE / "platform"         # domain CT/CS impls loaded by handler_ref at execution
+IMPL_ROOTS = (                              # CT/CS impls loaded by handler_ref at execution
+    WORKSPACE / "software_governance",      #   capability_side_effects.* / capability_transforms.*
+    WORKSPACE / "conformance_workloads",    #   workloads.<name>.implementation.*
+)
 
 _WF = "workload::WF_COLLATZ_CONJECTURE_V0"
 _PAYLOAD = {"numbers": [27]}
@@ -137,7 +140,7 @@ def check_pyproject_toml():
 
 def _exec_env() -> dict:
     env = os.environ.copy()
-    pythonpath = f"{RUNTIME_ROOT}{os.pathsep}{IMPL_ROOTS}"
+    pythonpath = os.pathsep.join([str(RUNTIME_ROOT), *(str(r) for r in IMPL_ROOTS)])
     env["PYTHONPATH"] = pythonpath + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["PGC_SNAPSHOT_ROOT"] = str(SNAPSHOT_ROOT)
     return env

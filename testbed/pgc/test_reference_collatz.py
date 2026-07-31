@@ -1,14 +1,14 @@
 """
 PGC reference-workload regression — execute workload::collatz against the assembled universe and
 assert observable behavior. This is the end-to-end proof that PGC composes an independently-authored
-domain onto the platform and executes it deterministically.
+domain onto the governance surface and executes it deterministically.
 
 Per design, we assert the OUTPUT SURFACE (Collatz sequences + terminal result), NOT the trace_id —
 the trace_id carries a wall-clock prefix and is not a content-derived contract.
 
-Requires an assembled snapshot that includes the `workload` domain (platform + workload). If absent,
-the tests skip. The workload's CT implementations live under `platform/` (module
-`reference_workloads.collatz.implementation.*`); we put that root on sys.path here as TEST-ONLY
+Requires an assembled snapshot that includes the `workload` domain (governance + workload). If
+absent, the tests skip. The workload's CT implementations live under `conformance_workloads/`
+(module `workloads.collatz.implementation.*`); we put that root on sys.path here as TEST-ONLY
 environment provisioning (the runtime itself never manipulates sys.path).
 """
 
@@ -24,11 +24,16 @@ from runtime.boot import default_snapshot_root
 SNAPSHOT_ROOT = default_snapshot_root()
 _MANIFEST = SNAPSHOT_ROOT / "manifest.json"
 
-# TEST-ONLY: provision the workload impl root (the platform repo) so the runtime can import
-# reference_workloads.collatz.implementation.* — this mirrors the PYTHONPATH a real run supplies.
-_PLATFORM_ROOT = SNAPSHOT_ROOT.parent / "platform"
-if _PLATFORM_ROOT.is_dir() and str(_PLATFORM_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PLATFORM_ROOT))
+# TEST-ONLY: provision the impl roots (both source repos) so the runtime can import
+# capability_side_effects.* and workloads.collatz.implementation.* — this mirrors the PYTHONPATH a
+# real run supplies.
+_IMPL_ROOTS = (
+    SNAPSHOT_ROOT.parent / "software_governance",      # capability_side_effects.*
+    SNAPSHOT_ROOT.parent / "conformance_workloads",    # workloads.collatz.implementation.*
+)
+for _root in _IMPL_ROOTS:
+    if _root.is_dir() and str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
 
 
 def _has_workload_domain() -> bool:

@@ -10,7 +10,7 @@ it (dispatcher, scheduler, memory, evidence) works only against the frozen
 RuntimePackage.
 
 Consumed from the assembled snapshot root (the assembler product; see
-pgc_charter/doc/SNAPSHOT_ASSEMBLY_CONTRACT.md):
+standards/doc/SNAPSHOT_ASSEMBLY_CONTRACT.md):
     tokenized/<domain>/dispatch.json     — routing (per-WF), pipeline, entry, bindings
     tokenized/<domain>/handlers.json     — ct, cs, rb_policy
     tokenized/<domain>/metadata.json     — projection_hash for trust verification
