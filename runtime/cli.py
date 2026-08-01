@@ -223,19 +223,48 @@ def _health_line(snapshot_root: Path, booted) -> str:
     Reports only checks that actually ran: every manifest domain was made resident and its hashes
     verified against the root of trust. Governance provenance is surfaced where a domain carries it
     (bound at compile, verified at assembly) so the health line reflects the full trust chain.
+
+    A governance surface imports no governance — it *is* the governance other domains compile
+    against, so it carries no `imported_governance` and is not counted as unbound. Counting it as
+    such reported a permanent shortfall (`4/5`) on a healthy snapshot and invited the same
+    investigation on every boot. The surface is derived from what the other attestations name, not
+    hardcoded, so a composition with a differently-named surface reports correctly too.
     """
     import json
 
     n = len(booted.domains)
-    governed = 0
+    bound: set[str] = set()
+    surfaces: set[str] = set()
     for name in booted.domains:
         att = snapshot_root / "trust" / name / "structure_attestation.json"
         try:
-            if json.loads(att.read_text(encoding="utf-8")).get("imported_governance"):
-                governed += 1
+            imported = json.loads(att.read_text(encoding="utf-8")).get("imported_governance")
         except (OSError, ValueError):
-            pass
-    gov = f"; governance provenance bound for {governed}/{n} domain(s)" if governed else ""
+            continue
+        if imported:
+            bound.add(name)
+            source = imported.get("import_domain")
+            if source:
+                surfaces.add(source)
+
+    if not bound:
+        return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified. No issues."
+
+    importing = [d for d in booted.domains if d not in surfaces]
+    unbound = sorted(d for d in importing if d not in bound)
+    surface_note = f", {'/'.join(sorted(surfaces))} is the governance surface" if surfaces else ""
+
+    if unbound:
+        gov = (
+            f"; governance provenance bound for {len(bound)}/{len(importing)} importing domain(s)"
+            f"{surface_note} — UNBOUND: {', '.join(unbound)}"
+        )
+        return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified{gov}."
+
+    gov = (
+        f"; governance provenance bound for all {len(importing)} importing domain(s)"
+        f"{surface_note}"
+    )
     return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified{gov}. No issues."
 
 
