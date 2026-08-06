@@ -127,6 +127,11 @@ class RuntimePackage:
     dispatch:  DispatchTable
     handlers:  HandlersTable
     vocab:     VocabIndex
+    # The snapshot this package was loaded from. Retained so a capability that observes the
+    # composition can be bound to the one it is executing from, rather than being told about a
+    # snapshot by its caller — a workflow must not be able to reason about a different composition
+    # than the one it is running inside.
+    snapshot_root: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +207,7 @@ def load_domain(
         dispatch = dispatch,
         handlers = handlers,
         vocab    = vocab,
+        snapshot_root = str(root),
     )
 
 

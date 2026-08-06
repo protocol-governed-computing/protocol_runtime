@@ -231,7 +231,7 @@ def _execute_cs_step(
     rb_cs_map = pkg.handlers.rb_policy.get(rb_addr, {})
     policy_entry = rb_cs_map.get(cs_addr, {})
     policy_raw = policy_entry.get("policy") or {}
-    policy = _expand_policy(policy_raw, data_root)
+    policy = _expand_policy(policy_raw, data_root, pkg.snapshot_root)
 
     # Inject workflow executor for CS types that need nested WF invocation.
     # Injected unconditionally — CSs that don't use it ignore the key.
@@ -382,17 +382,27 @@ def _apply_outputs(
 # Policy template expansion
 # ---------------------------------------------------------------------------
 
-def _expand_policy(policy_raw: dict[str, Any], data_root: str) -> dict[str, Any]:
+def _expand_policy(
+    policy_raw: dict[str, Any], data_root: str, snapshot_root: str = ""
+) -> dict[str, Any]:
     """
-    Expand {{module_data_root}} templates in the CS policy config.
+    Expand path templates in the CS policy config.
 
-    Serializes to JSON, replaces the template string, deserializes back.
-    data_root must be an absolute path string — never a relative path.
+        {{module_data_root}}   where a capability keeps its state
+        {{snapshot_root}}      the composition this workflow is executing from
+
+    The second exists for capabilities that *observe* the composition rather than store state in
+    it. Such a capability must be bound to the snapshot it is running inside — if the root came
+    from a caller, a workflow could be pointed at a different composition and would report
+    confidently about the wrong one.
+
+    Serializes to JSON, replaces the template strings, deserializes back. Both roots must be
+    absolute path strings — never relative.
     """
     if not policy_raw:
         return {}
 
-    root = str(data_root).rstrip("/")
     policy_str = json.dumps(policy_raw)
-    policy_str = policy_str.replace("{{module_data_root}}", root)
+    policy_str = policy_str.replace("{{module_data_root}}", str(data_root).rstrip("/"))
+    policy_str = policy_str.replace("{{snapshot_root}}", str(snapshot_root).rstrip("/"))
     return json.loads(policy_str)
