@@ -96,7 +96,11 @@ def execute_cc(
         inputs_spec: dict       = step.get("inputs") or {}
         outputs_spec: dict      = step.get("outputs") or {}
         on_result:   dict       = step.get("on_result") or {}
-        step_id:     str        = step.get("step_id") or ""
+        # The compiler emits a step's name under `step`; `step_id` was the older spelling and is
+        # still honoured. Reading only the latter left `step_results` unkeyed, so every
+        # `$.results.<step>.<field>` resolved to None — a binding the grammar accepts, the compiler
+        # renders and the runtime silently dropped.
+        step_id:     str        = step.get("step_id") or step.get("step") or ""
 
         # Resolve step inputs from CC inputs and accumulated step results
         resolved_inputs = _resolve_step_inputs(inputs_spec, cc_inputs, step_results)
