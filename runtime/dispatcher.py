@@ -61,6 +61,7 @@ def execute_cc(
     pkg:       RuntimePackage,
     writer:    TraceWriter,
     data_root: str,
+    wf_addr:   int = -1,
 ) -> tuple[str, dict[str, Any]]:
     """
     Execute a CC pipeline and return (result_status, surface).
@@ -112,7 +113,7 @@ def execute_cc(
         else:
             # CS step — controlled side effect via declared handler
             result_status, raw_result = _execute_cs_step(
-                step_addr, op, resolved_inputs, rb_addr, pkg, data_root, wf_executor
+                step_addr, op, resolved_inputs, rb_addr, pkg, data_root, wf_executor, wf_addr
             )
 
         # Apply outputs mapping: {cc_field: "$.capability_result.<ct_field>"} → surface fragment
@@ -216,6 +217,7 @@ def _execute_cs_step(
     pkg: RuntimePackage,
     data_root: str,
     wf_executor=None,
+    wf_addr: int = -1,
 ) -> tuple[str, dict[str, Any]]:
     """
     Execute a CS (side effect) step.
@@ -235,7 +237,41 @@ def _execute_cs_step(
     rb_cs_map = pkg.handlers.rb_policy.get(rb_addr, {})
     policy_entry = rb_cs_map.get(cs_addr, {})
     policy_raw = policy_entry.get("policy") or {}
+
+    # An act that declared a reach resolves against the composed description the compiler sealed
+    # for it — its own entities and the consulted ones, each marked. Handed over, not resolved
+    # here: the runtime reads what the composition gives it.
+    composed = pkg.handlers.wf_storage.get(wf_addr)
+    if composed is not None and policy_raw.get("storage_structure_artifact") is not None:
+        policy_raw = {**policy_raw, "storage_structure_artifact": composed}
+
     policy = _expand_policy(policy_raw, data_root, pkg.snapshot_root)
+
+    # A reach reads and never writes. The operation declares whether it writes and the composed
+    # description declares whether the entity is consulted, so the refusal rests on two declared
+    # facts and infers nothing. Refused before the capability runs, because a write that has
+    # happened cannot be unhappened.
+    store_entity = resolved_inputs.get("__store__")
+    if composed is not None and store_entity:
+        entity = (composed.get("frontmatter", {}).get("core", {})
+                  .get("entity_stores", {}).get(store_entity, {}))
+        effect = ((cs_entry.get("cs_metadata", {}).get("operations", {})
+                   .get("operations", {}).get(op, {})).get("effect"))
+        if entity.get("reach") == "consulted" and effect == "write":
+            # VIOLATION rather than an exception: a step states its outcome and the act routes on
+            # it, which is how every other refusal reaches the workflow. Returned before the
+            # capability runs, because a write that has happened cannot be unhappened.
+            return "VIOLATION", {
+                "result_status": "VIOLATION",
+                "refusal": "REACH_IS_READ_ONLY",
+                "store": store_entity,
+                "described_by": entity.get("described_by"),
+                "message": (
+                    f"act may not write to '{store_entity}': it is described by "
+                    f"{entity.get('described_by')}, which this act consults and does not own. "
+                    f"The subdomain that owns a record is the only writer of it"
+                ),
+            }
 
     # Inject workflow executor for CS types that need nested WF invocation.
     # Injected unconditionally — CSs that don't use it ignore the key.

@@ -123,7 +123,7 @@ def run_wf(
             cc_inputs = ctx.resolve_inputs(wf_bindings)
 
             result_status, surface = execute_cc(
-                current_addr, rb_addr, cc_inputs, pkg, writer, data_root
+                current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr
             )
             ctx.record_result(current_addr, surface)
 
