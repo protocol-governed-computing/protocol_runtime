@@ -127,10 +127,24 @@ def run_wf(
             )
             ctx.record_result(current_addr, surface)
 
-            # Observation: a CC outcome that routes to an emitting exit fires a domain event.
-            ev_fqdn = pkg.dispatch.emits.get(wf_addr, {}).get(current_addr, {}).get(result_status)
-            if ev_fqdn:
-                writer.event(ev_fqdn, surface)
+            # Observation: a CC outcome that routes to an announcing exit states the moments that
+            # act completed, in the order the composition sealed. The order is normative — it is what
+            # a reader of the account sees — so the sequence is announced as sealed and never
+            # reordered here. A sequence of one is the ordinary case.
+            announced = pkg.dispatch.emits.get(wf_addr, {}).get(current_addr, {}).get(result_status)
+            if announced:
+                # A single moment was sealed as a string before announcements could be plural. Read
+                # here rather than refused, so a snapshot built by an older compiler still runs.
+                if isinstance(announced, str):
+                    announced = [announced]
+                for ev_fqdn in announced:
+                    if not ev_fqdn:
+                        # A moment declared for this transition and absent from what was sealed. The
+                        # act says so rather than announcing nothing: silence is indistinguishable
+                        # from a moment nobody declared, which is the failure this exists to end.
+                        writer.event("", {"unannounceable": True, "transition": result_status})
+                        continue
+                    writer.event(ev_fqdn, surface)
 
         else:
             # Boundary node (IN_, EXIT_) — no pipeline

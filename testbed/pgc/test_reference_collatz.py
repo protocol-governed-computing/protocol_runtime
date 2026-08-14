@@ -113,11 +113,19 @@ class ReferenceCollatzTest(unittest.TestCase):
         # AC: the workflow is attributed to its bound actor context
         wf_start = next(e for e in events if e.get("event_type") == "WF_START")
         self.assertEqual(wf_start["detail"].get("actor"), "workload::AC_REFERENCE_ACTOR_V0")
-        # EV: a governed domain event was emitted, carrying the evaluation result
-        event = next((e for e in events if e.get("event_type") == "EVENT"), None)
-        self.assertIsNotNone(event, "no domain EVENT emitted to the trace")
-        self.assertEqual(event["detail"]["ev_fqdn"], "workload::EV_CONJECTURE_EVALUATED_V0")
-        self.assertTrue(event["detail"]["payload"]["all_terminate"])
+        # EV: the moments this act announced, in the order it announced them.
+        #
+        # Asserted as a whole sequence rather than by taking the first. An act may announce several
+        # at one ending, and a reader that takes the first accepts extras without noticing — which is
+        # exactly the failure the plural announcement could introduce. Taking the first was the one
+        # place in the composition where several would have arrived silently.
+        announced = [e["detail"]["ev_fqdn"] for e in events if e.get("event_type") == "EVENT"]
+        self.assertEqual(
+            announced, ["workload::EV_CONJECTURE_EVALUATED_V0"],
+            "this act announces exactly one moment; anything else is a moment nobody designed",
+        )
+        payload = next(e["detail"]["payload"] for e in events if e.get("event_type") == "EVENT")
+        self.assertTrue(payload["all_terminate"])
 
 
 if __name__ == "__main__":
