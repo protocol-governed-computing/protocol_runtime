@@ -81,15 +81,22 @@ class HandlersTable:
     """
     Implementation dispatch table from handlers.json.
 
-    ct:        {ct_addr: {"ct_ir": {...}}}
-    cs:        {cs_addr: {"handler_ref": {...}, "cs_metadata": {...}}}
-    rb_policy: {rb_addr: {cs_addr: policy_config}}
+    ct:         {ct_addr: {"ct_ir": {...}}}
+    cs:         {cs_addr: {"handler_ref": {...}, "cs_metadata": {...}}}
+    rb_policy:  {rb_addr: {cs_addr: policy_config}}
+    wf_storage: {wf_addr: storage_structure_artifact}
+
+    `wf_storage` is present only for an act that declares a reach: the compiler composed the
+    descriptions of the bindings it operates under and marked every entity `owned` or `consulted`.
+    An act that consults nothing is absent from it and resolves against its own binding exactly as
+    before.
 
     All dict keys are ints.
     """
-    ct:        dict[int, dict[str, Any]]
-    cs:        dict[int, dict[str, Any]]
-    rb_policy: dict[int, dict[int, Any]]
+    ct:         dict[int, dict[str, Any]]
+    cs:         dict[int, dict[str, Any]]
+    rb_policy:  dict[int, dict[int, Any]]
+    wf_storage: dict[int, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -305,7 +312,11 @@ def _build_handlers(raw: dict) -> HandlersTable:
         rb_addr = int(rb_key)
         rb_policy[rb_addr] = {int(cs_key): policy for cs_key, policy in cs_map.items()}
 
-    return HandlersTable(ct=ct, cs=cs, rb_policy=rb_policy)
+    wf_storage: dict[int, dict[str, Any]] = {
+        int(k): v for k, v in raw.get("wf_storage", {}).items()
+    }
+
+    return HandlersTable(ct=ct, cs=cs, rb_policy=rb_policy, wf_storage=wf_storage)
 
 
 def _build_vocab(forward_raw: dict, reverse_raw: dict) -> VocabIndex:
