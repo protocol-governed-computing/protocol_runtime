@@ -1,8 +1,8 @@
 # Architecture — `protocol_runtime`
 
-**Release 5.** This document is frozen for this release. It describes what this repository is, what
-it owns, and what it must never do. It is written to be read before any code, and assumes no prior
-familiarity with Protocol-Governed Computing.
+This document describes what this repository is, what it owns, and what it must never do. It is
+written to be read before any code, and assumes no prior familiarity with Protocol-Governed
+Computing.
 
 For the big picture — what PGC is and how the repositories compose — see
 **https://github.com/protocol-governed-computing**.
@@ -146,6 +146,7 @@ run.sh              run a workflow from the command line
 
 runtime/
     api.py          the entry point: run a workflow, get a result and a trace
+    cli.py          the `protocol_runtime` console script — a client of the API
     boot.py         warm reboot — snapshot resident, hash-verified
     loader.py       resolves what the snapshot says to run
     scheduler.py    workflow-level traversal
