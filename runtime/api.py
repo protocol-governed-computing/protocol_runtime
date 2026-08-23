@@ -57,7 +57,8 @@ def run_workflow(
 
     wf_addr = pkg.vocab.addr(wf_fqdn)   # KeyError if the WF is not in the snapshot vocab
     writer = TraceWriter(trace_dir=trace_dir, trace_id=trace_id, domain=domain,
-                         wf_addr=wf_addr, wf_fqdn=wf_fqdn)
+                         wf_addr=wf_addr, wf_fqdn=wf_fqdn, snapshot_root=booted.snapshot_root,
+                         snapshot_id=booted.snapshot_id)
     try:
         status, surface = run_wf(wf_fqdn=wf_fqdn, payload=payload, pkg=pkg,
                                  writer=writer, data_root=str(data_root))

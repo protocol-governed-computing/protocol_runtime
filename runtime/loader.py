@@ -46,6 +46,7 @@ class DispatchTable:
     Integer-keyed routing substrate from dispatch.json.
 
     routing:  {wf_addr: {cc_addr: {condition_addr: {"addr": next_cc_addr, "key": node_key}}}}
+    terminal: {wf_addr: {cc_addr: {condition_addr: {"exit": node_key, "type": "EXIT"}}}}
     pipeline: {cc_addr: [step, ...]}
     entry:    {wf_addr: {"start": cc_addr, "start_key": node_key, "rb": rb_addr, "in": in_addr}}
     bindings: {wf_addr: {node_key: {input_name: path_or_literal}}}
@@ -70,6 +71,12 @@ class DispatchTable:
     The nested dicts are plain Python dicts (not frozen) — callers must not mutate.
     """
     routing:  dict[int, dict[int, dict[int, Any]]]
+    # Declared endings. An outcome in neither `routing` nor `terminal` is one the declarations do
+    # not answer for, and the traversal refuses rather than ending (`3a` EX-5, `3c` RT-9).
+    terminal: dict[int, dict[int, dict[int, Any]]]
+    # The input contract each IN gate admits against. An IN that declares none has nothing to
+    # determine, and absence is not permission (AI-6).
+    admission: dict[int, dict[str, Any]]
     pipeline: dict[int, list[dict]]
     entry:    dict[int, dict[str, Any]]        # entry may carry "actor" (FQDN) — Authority attribution
     bindings: dict[int, dict[str, dict[str, Any]]]
@@ -260,6 +267,18 @@ def _build_dispatch(raw: dict) -> DispatchTable:
             for cc_key, cond_map in cc_map.items()
         }
 
+    terminal: dict[int, dict[int, dict[int, Any]]] = {}
+    for wf_key, cc_map in raw.get("terminal", {}).items():
+        wf_addr = int(wf_key)
+        terminal[wf_addr] = {
+            int(cc_key): {int(cond): tgt for cond, tgt in cond_map.items()}
+            for cc_key, cond_map in cc_map.items()
+        }
+
+    admission: dict[int, dict[str, Any]] = {
+        int(k): v for k, v in raw.get("admission", {}).items()
+    }
+
     pipeline: dict[int, list[dict]] = {}
     for cc_key, steps in raw.get("pipeline", {}).items():
         cc_addr = int(cc_key)
@@ -290,6 +309,8 @@ def _build_dispatch(raw: dict) -> DispatchTable:
 
     return DispatchTable(
         routing  = routing,
+        terminal = terminal,
+        admission = admission,
         pipeline = pipeline,
         entry    = entry,
         bindings = bindings,

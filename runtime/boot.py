@@ -33,6 +33,7 @@ from runtime.loader import RuntimePackage, load_domain
 class BootedSnapshot:
     """The resident, verified executable universe."""
     snapshot_id: str
+    snapshot_root: Path
     manifest: dict[str, Any]
     domains: dict[str, RuntimePackage]
 
@@ -111,14 +112,23 @@ def boot(snapshot_root: str | Path | None = None) -> BootedSnapshot:
     manifest = _load_manifest(root)
     domains_meta = manifest.get("domains", [])
 
-    # 2. domain-set integrity — recompute the composite and compare to the manifest's claim
-    recomputed = _composite_hash(domains_meta)
-    claimed = manifest.get("composite_hash")
-    if recomputed != claimed:
-        raise RuntimeError(
-            f"Snapshot composite_hash mismatch: recomputed {recomputed!r} != manifest {claimed!r} "
-            f"(domain-set tamper or stale manifest)."
-        )
+    # 2. ACCEPTANCE — all four conditions of `3b` §7, established from content.
+    #
+    # The runtime does not carry its own weaker copy of this. It previously recomputed the composite
+    # over the manifest's RECORDED per-domain hashes, which detects a tampered manifest and not a
+    # tampered constituent — and a snapshot with an edited projection booted and reported healthy.
+    # `assembler.core.verify_snapshot` recomputes every constituent from its bytes; there is one
+    # acceptance determination and both the assembler and the runtime reach it.
+    #
+    # Importing it is not a layering breach: acceptance is a determination ABOUT a snapshot (`3b` §7),
+    # not part of assembling one, and a second implementation of one determination is two things that
+    # can disagree.
+    from assembler.core import AssemblyError, verify_snapshot
+    try:
+        verify_snapshot(root)
+    except AssemblyError as exc:
+        raise RuntimeError(f"Snapshot refused at acceptance: {exc}") from exc
+    recomputed = manifest.get("snapshot_id")
 
     # 3-4. per-domain load, anchored to the manifest's tokenized hash
     domains: dict[str, RuntimePackage] = {}
@@ -131,6 +141,7 @@ def boot(snapshot_root: str | Path | None = None) -> BootedSnapshot:
 
     return BootedSnapshot(
         snapshot_id=manifest.get("snapshot_id", recomputed),
+        snapshot_root=root,
         manifest=manifest,
         domains=domains,
     )

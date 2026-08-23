@@ -32,6 +32,35 @@ from pathlib import Path
 from typing import Any
 
 
+CLASSIFICATION_FQDN = "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V0"
+
+
+def _content_classification(snapshot_root: Path) -> dict[str, list[str]]:
+    """Which trace content is determinative and which observational, from the sealed composition.
+
+    `3e` EV-5 requires the distinction be declared rather than inferred, and the declaration is a
+    governed artifact rather than a constant here — adding a field is an authoring act, sealed and
+    attested. No fallback: evidence written under an unknown classification is evidence a checker
+    cannot compare, which is the state EV-5 exists to end.
+    """
+    for path in (snapshot_root / "canonical").rglob("*.json"):
+        if path.name == "metadata.json":
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("fqdn_id") != CLASSIFICATION_FQDN:
+            continue
+        fm = data.get("frontmatter") or {}
+        return {
+            "determinative": list(fm["determinative_fields"]["entries"]),
+            "observational": list(fm["observational_fields"]["entries"]),
+        }
+    raise RuntimeError(
+        f"{CLASSIFICATION_FQDN} is not in the composition at {snapshot_root} — the "
+        f"determinative/observational classification this trace would be written under is not in "
+        f"force (3e EV-5)."
+    )
+
+
 class TraceWriter:
     """
     Append-only trace writer for a single workflow execution.
@@ -53,6 +82,8 @@ class TraceWriter:
         domain: str,
         wf_addr: int,
         wf_fqdn: str,
+        snapshot_root: Path,
+        snapshot_id: str,
     ) -> None:
         trace_dir.mkdir(parents=True, exist_ok=True)
         self._path = trace_dir / f"{trace_id}.jsonl"
@@ -61,6 +92,25 @@ class TraceWriter:
         self._domain = domain
         self._wf_addr = wf_addr
         self._wf_fqdn = wf_fqdn
+
+        # The trace states which of its content is determinative, as its first record. Evidence that
+        # carried the values and not the classification would be evidence a checker had to guess at,
+        # and `3e` §5.2 says a checker that guesses is deciding for itself what governance meant.
+        # Carried in the trace rather than looked up later so the record is checkable by a party with
+        # no access to the producing system (EV-16, AI-16).
+        classification = _content_classification(snapshot_root)
+        self._fh.write(json.dumps({
+            "trace_schema_version": "v0",
+            "event_type": "trace_classification",
+            "classified_by": CLASSIFICATION_FQDN,
+            # Which closure applied — `3e` §3.1 point 1. At execution the sealed snapshot IS the
+            # closure: SN-10 makes it the sole source of governed behaviour, so naming it names
+            # every governing element that applied and every rule the closure supplied. A checker
+            # holding this id and the snapshot can resolve every address below to what governed it.
+            "snapshot_id": snapshot_id,
+            **classification,
+        }, separators=(",", ":")) + "\n")
+        self._fh.flush()
 
     # --- Public event methods ---
 
@@ -111,6 +161,19 @@ class TraceWriter:
 
     def wf_complete(self, result_status: str) -> None:
         self._emit("WF_COMPLETE", result_status=result_status, detail={"wf_fqdn": self._wf_fqdn})
+
+    def route(self, from_addr: int | None, condition: str, to_addr: int | None) -> None:
+        """The routing determination — `3e` §3.1 point 4, the dominant consequence.
+
+        The trace recorded the sequence of nodes and not the decision that produced it. A reader
+        could see that one contract followed another and not that the transition was the one the
+        sealed routing table declared for that outcome. Recording the decision makes the path
+        checkable against the representation rather than merely consistent with it (EX-15).
+
+        `to_addr` None is terminal: the outcome routed nowhere, which is the traversal ending.
+        """
+        self._emit("WF_ROUTE", cc_addr=from_addr, step_addr=to_addr, result_status=condition,
+                   detail={"terminal": to_addr is None})
 
     def error(self, message: str, **extra: Any) -> None:
         self._emit("ERROR", detail={"message": message, **extra})

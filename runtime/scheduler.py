@@ -53,6 +53,35 @@ _MAX_HOPS = 64
 # Public API
 # ---------------------------------------------------------------------------
 
+def _admit(payload: dict, contract: dict) -> str:
+    """Determine admission against the gate's declared input contract — ACK or NACK.
+
+    Determined from what the IN declares and nothing else: a required field absent, or a declared
+    type unsatisfied, is NACK. The workflow routes on that outcome exactly as it routes on any other,
+    so a refusal here is carried by the topology rather than raised past it.
+
+    The IN also carries prose `extensions.admission_rules` ("each element must be a positive
+    integer"). Prose determines nothing (MB-1) and is not consulted. Where a gate must enforce more
+    than its declared contract, the contract is what needs to say so.
+    """
+    _TYPES = {"array": list, "string": str, "integer": int, "number": (int, float),
+              "boolean": bool, "object": dict}
+    for field, spec in contract.items():
+        present = field in payload
+        if spec.get("required") and not present:
+            return "NACK"
+        if not present:
+            continue
+        expected = _TYPES.get(spec.get("type"))
+        if expected is not None and not isinstance(payload[field], expected):
+            return "NACK"
+    return "ACK"
+
+
+class UnroutedOutcomeError(RuntimeError):
+    """An outcome with neither declared routing nor a declared ending (EX-5, RT-9)."""
+
+
 def run_wf(
     wf_fqdn:   str,
     payload:   dict[str, Any],
@@ -147,22 +176,64 @@ def run_wf(
                     writer.event(ev_fqdn, surface)
 
         else:
-            # Boundary node (IN_, EXIT_) — no pipeline
-            # admission_snapshot not yet integrated; IN_ nodes pass as ACK
-            result_status = "ACK"
+            # Boundary node — an IN admission gate. EXIT nodes carry no address and are reached as
+            # a declared ending rather than traversed, so this branch is IN only.
+            #
+            # This returned an unconditional "ACK". A declared admission point that determines
+            # nothing produces the same outcome as one that permits, which is `1c` AI-6 — the
+            # invariant whose breach is least visible, because the system behaves like a governed
+            # one until the case arrives that governance would have refused.
+            contract = pkg.dispatch.admission.get(current_addr)
+            if contract is None:
+                writer.error("no admission contract", node=current_addr)
+                writer.wf_complete("VIOLATION")
+                raise UnroutedOutcomeError(
+                    f"admission gate {current_addr} declares no input contract — there is nothing "
+                    f"to determine admission against, and absence is not permission (1c AI-6)."
+                )
+            result_status = _admit(payload, contract)
+            writer.cc_step(current_addr, current_addr, pkg.vocab.fqdn(current_addr),
+                           "ADMIT", {"outcome": result_status})
 
         # Resolve result_status → condition address and route to next node.
         # Routing values are {"addr": int, "key": str} — addr is the next CC address,
         # key is the next node_key for bindings disambiguation.
+        previous_addr = current_addr
         condition_addr = _condition_addr(result_status, pkg)
         routing = pkg.dispatch.routing.get(wf_addr, {}).get(current_addr, {})
-        next_entry = routing.get(condition_addr)  # None → terminal
+        next_entry = routing.get(condition_addr)
+
         if isinstance(next_entry, dict):
             current_addr = next_entry.get("addr")
             current_node_key = next_entry.get("key", "")
-        else:
-            current_addr = next_entry  # bare int (legacy) or None
+        elif next_entry is not None:
+            current_addr = next_entry  # bare int (legacy)
             current_node_key = ""
+        else:
+            # No continuation. Two cases that were one, and reporting success for both is what
+            # `3a` EX-5 and `3c` RT-9 forbid: an outcome the declarations do not answer for MUST
+            # refuse, and ending the traversal instead made a dead end indistinguishable from a
+            # declared ending. Termination is now declared (`dispatch.terminal`); its absence is
+            # the dead end.
+            ending = pkg.dispatch.terminal.get(wf_addr, {}).get(current_addr, {}).get(condition_addr)
+            if ending is None:
+                writer.error(
+                    "unrouted outcome",
+                    node=current_addr, outcome=result_status, condition_addr=condition_addr,
+                )
+                writer.route(from_addr=current_addr, condition=result_status, to_addr=None)
+                writer.wf_complete("VIOLATION")
+                raise UnroutedOutcomeError(
+                    f"outcome {result_status!r} from node {current_addr} has neither declared "
+                    f"routing nor a declared ending in this workflow — the declarations do not "
+                    f"answer for it (3a EX-5, 3c RT-9)."
+                )
+            current_addr = None
+            current_node_key = ""
+            declared_ending = ending.get("exit", "")
+
+        # Evidence the routing determination, not only its effect (`3e` §3.1 point 4).
+        writer.route(from_addr=previous_addr, condition=result_status, to_addr=current_addr)
 
     writer.wf_complete(result_status)
     return result_status, surface
