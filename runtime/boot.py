@@ -2,7 +2,7 @@
 boot.py — warm reboot: bring the assembled snapshot resident and hash-verified.
 
 The manifest is the ROOT OF TRUST. The runtime boots *through* it, never by scanning the
-filesystem. Contract: .github/doc/SNAPSHOT_ASSEMBLY_CONTRACT.md
+filesystem. Contract: snapshot_assembler/doc/SNAPSHOT_ASSEMBLY_CONTRACT.md
 
 Boot sequence:
     1. load manifest.json
