@@ -6,6 +6,18 @@ The runtime traverses a precompiled execution graph and produces traceable, gove
 does not discover behavior, interpret intent, or contain business logic. Everything it will do was
 decided at compile time; execution is a traversal of what the snapshot already says.
 
+## Install
+
+```bash
+pip install pgc-runtime
+```
+
+Once installed:
+
+```bash
+protocol_runtime --help
+```
+
 ## Where it fits
 
 ```
@@ -97,3 +109,47 @@ run reproducible and reviewable after the fact.
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE`.
+
+---
+
+## The package family
+
+| Package | Repository | Role |
+|---|---|---|
+| `pgc-compiler` | `protocol_compiler` | declarations → compiled projections |
+| `pgc-assembler` | `snapshot_assembler` | projections → sealed snapshot |
+| `pgc-runtime` | `protocol_runtime` | snapshot → governed execution |
+| `pgc-inspector` | `snapshot_inspector` | snapshot → read-only inspection |
+| `pgc-transformation` | `transformation` | change request → protocol artifacts |
+| `pgc-governance` | `software_governance` | the governance surface and its capability implementations |
+| `pgc-workloads` | `conformance_workloads` | the workloads that make conformance observable |
+| `pgc-domains` | `business_domains` | the business domain implementations the composed snapshot binds |
+
+`pip install pgc` brings in the whole family.
+
+**Installing the toolchain is one of two steps.** The compiler resolves the governance surface from
+`PGC_PLATFORM_ROOT` — fail-hard, cwd-independent, zero inference — so the *declarations* come from a
+repository you point at, never from a wheel. A registry inside a package would be a second governance
+surface competing with the repository's, and a build could then be governed by a stale copy.
+
+```bash
+git clone https://github.com/protocol-governed-computing/software_governance
+export PGC_PLATFORM_ROOT=$PWD/software_governance
+pgc            # reports what is installed and whether the anchor resolves
+```
+
+`PGC_BUILD_ROOT` (compiled output, keeping the governance repo read-only) and `PGC_DOMAIN_ROOTS`
+(additional domains contributing their own `registry/structures`) are optional.
+
+**Versioning.** Two schemes, and the published version follows the second.
+
+- **Internal** — each repository's `VERSION` file, a monotonic composition ordinal. PGC versions the
+  composition rather than each repo: they release together and the governance closure forces lockstep,
+  so the ordinal names which composition a repo belongs to. Development happens on `dev/<N>` and each
+  cycle is tagged `release-<N>`. This is not published.
+- **Public** — `PUBLIC_VERSION`, tagged on every component repository. The platform is at **`v2`**.
+
+**The published version is the public one: `v2` is `2.0.0`.** The standard the packages implement is a
+separate artifact on its own track and is not this number.
+
+The standard these packages implement is published separately: https://doi.org/10.5281/zenodo.22150616
