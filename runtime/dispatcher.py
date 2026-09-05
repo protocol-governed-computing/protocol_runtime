@@ -48,6 +48,41 @@ from typing import Any
 from runtime.loader import RuntimePackage
 from runtime.evidence import TraceWriter
 from runtime.ct_execute import execute_ct
+from runtime.ct_errors import StructuredError
+
+
+def _violation_payload(exc: StructuredError) -> dict[str, Any]:
+    """A structured refusal, rendered into the shape a step result carries.
+
+    Refusals reach the workflow as a VIOLATION result and route on it — the same channel the reach
+    refusal uses. An exception escaping the dispatcher would bypass routing and the trace both.
+    """
+    return {
+        "result_status": "VIOLATION",
+        "refusal": exc.error_code,
+        "node_category": exc.node_category,
+        "message": str(exc),
+    }
+
+
+class CSExecutionError(StructuredError):
+    """A CS step could not be executed.
+
+    `CS_EXECUTION_FAILED` is the only CS code the trace schema admits, so the distinction between
+    an absent handler, an absent callable, a missing optional dependency and a failing capability
+    is carried in the message rather than in a code this snapshot does not declare.
+
+    Distinct from a VIOLATION return: a violation is governance deciding no, and it routes through
+    the workflow. This is the environment being unable to run the step at all.
+    """
+
+    def __init__(self, message: str, cause: Exception | None = None):
+        super().__init__(
+            error_code="CS_EXECUTION_FAILED",
+            node_category="CS",
+            message=message,
+            cause=cause,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +147,14 @@ def execute_cc(
             result_status, raw_result = _execute_ct_step(step_addr, resolved_inputs, pkg)
         else:
             # CS step — controlled side effect via declared handler
-            result_status, raw_result = _execute_cs_step(
-                step_addr, op, resolved_inputs, rb_addr, pkg, data_root, wf_executor, wf_addr
-            )
+            try:
+                result_status, raw_result = _execute_cs_step(
+                    step_addr, op, resolved_inputs, rb_addr, pkg, data_root, wf_executor, wf_addr
+                )
+            except StructuredError as exc:
+                # Symmetry with the CT branch: a CS that cannot be loaded or that raises is a
+                # VIOLATION the workflow routes on, not a traceback the caller receives.
+                result_status, raw_result = "VIOLATION", _violation_payload(exc)
 
         # Apply outputs mapping: {cc_field: "$.capability_result.<ct_field>"} → surface fragment
         surface_fragment = _apply_outputs(outputs_spec, raw_result, step_results)
@@ -181,9 +221,19 @@ def _execute_ct_step(
     try:
         raw_result = execute_ct(ct_ir, resolved_inputs)
         return "SUCCESS", (raw_result if isinstance(raw_result, dict) else {})
-    except Exception:
-        # CT exception → protocol VIOLATION; do not propagate
-        return "VIOLATION", {}
+    except StructuredError as exc:
+        # CT refusal → protocol VIOLATION, carrying what was refused. Returning a bare {} here
+        # discarded the only account of why the step failed, which left an operator with a status
+        # and no cause.
+        return "VIOLATION", _violation_payload(exc)
+    except Exception as exc:
+        # An unstructured exception from a transform is still a VIOLATION and still must not
+        # propagate, but it is named rather than swallowed.
+        return "VIOLATION", {
+            "result_status": "VIOLATION",
+            "refusal": "CT_EXECUTION_FAILED",
+            "message": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _make_workflow_executor(
@@ -283,9 +333,57 @@ def _execute_cs_step(
     cs_metadata = cs_entry.get("cs_metadata", {})
     cs_fqdn = pkg.vocab.fqdn(cs_addr)
 
-    mod = importlib.import_module(handler_ref["module"])
-    cls = getattr(mod, handler_ref["callable"])
-    runtime = cls(config=policy, metadata=cs_metadata, capability_code=cs_fqdn)
+    # Loading a sealed handler_ref runs code this package does not own. Every step of that —
+    # importing the module, finding the callable, constructing it — may raise, and none of it may
+    # escape as a bare ModuleNotFoundError or AttributeError. An ungoverned crash is not a declared
+    # outcome, and the trace cannot record what it never sees.
+    module_path = handler_ref.get("module")
+    callable_name = handler_ref.get("callable")
+    if not module_path or not callable_name:
+        raise CSExecutionError(
+            f"incomplete handler_ref for CS {cs_fqdn}: module={module_path!r} "
+            f"callable={callable_name!r}"
+        )
+
+    try:
+        mod = importlib.import_module(module_path)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        if missing == module_path or module_path.startswith(missing + "."):
+            raise CSExecutionError(
+                f"handler_ref names module {module_path!r} for CS {cs_fqdn} and it is not "
+                f"importable — the snapshot names an implementation this environment does not carry",
+                cause=exc,
+            ) from exc
+        raise CSExecutionError(
+            f"handler_ref module {module_path!r} for CS {cs_fqdn} requires {missing!r}, which is "
+            f"not installed — the domain's optional dependency is missing, not the capability",
+            cause=exc,
+        ) from exc
+    except ImportError as exc:
+        raise CSExecutionError(
+            f"handler_ref module {module_path!r} for CS {cs_fqdn} failed to import: {exc}",
+            cause=exc,
+        ) from exc
+
+    try:
+        cls = getattr(mod, callable_name)
+    except AttributeError as exc:
+        raise CSExecutionError(
+            f"handler_ref names callable {callable_name!r} in {module_path!r} for CS {cs_fqdn} "
+            f"and the module does not define it",
+            cause=exc,
+        ) from exc
+
+    try:
+        runtime = cls(config=policy, metadata=cs_metadata, capability_code=cs_fqdn)
+    except StructuredError:
+        raise
+    except Exception as exc:
+        raise CSExecutionError(
+            f"CS {cs_fqdn} ({module_path}.{callable_name}) raised while being constructed: {exc}",
+            cause=exc,
+        ) from exc
 
     # Translate __store__ (compiler-emitted entity tag) to __pgs_store_entity__ (CS protocol key)
     store_entity = resolved_inputs.get("__store__")
@@ -293,7 +391,18 @@ def _execute_cs_step(
     if store_entity:
         cs_inputs["__pgs_store_entity__"] = store_entity
 
-    raw_result = runtime.execute(op=op, payload=cs_inputs)
+    # The capability itself is external code. The CT path already wraps its atom call; this is the
+    # same boundary, and it was the one place a domain exception could still reach the caller
+    # unstructured.
+    try:
+        raw_result = runtime.execute(op=op, payload=cs_inputs)
+    except StructuredError:
+        raise
+    except Exception as exc:
+        raise CSExecutionError(
+            f"CS {cs_fqdn} raised during op {op!r}: {type(exc).__name__}: {exc}",
+            cause=exc,
+        ) from exc
     if not isinstance(raw_result, dict):
         raw_result = {}
 

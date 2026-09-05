@@ -17,6 +17,22 @@ class CTExecutionError(StructuredError):
         )
 
 
+class CTArtifactNotFound(StructuredError):
+    """The sealed handler_ref names something that is not present.
+
+    Distinct from CT_EXECUTION_FAILED: nothing was executed and nothing could be. The snapshot
+    named a module or callable, and resolution of that name failed.
+    """
+
+    def __init__(self, message: str, cause: Exception | None = None):
+        super().__init__(
+            error_code="CT_ARTIFACT_NOT_FOUND",
+            node_category="CT",
+            message=message,
+            cause=cause,
+        )
+
+
 class CTExecutor:
     def __init__(self):
         pass
@@ -83,8 +99,40 @@ class CTExecutor:
         if not module_path or not callable_name:
             raise CTExecutionError(f"Incomplete handler_ref on step: {step.get('atom')}")
 
-        mod = importlib.import_module(module_path)
-        execute_fn = getattr(mod, callable_name)
+        # Importing a sealed handler_ref is a resolution step, and it fails in two ways that mean
+        # different things. The module named by the snapshot may be absent — a closure failure. Or
+        # the module may be present and one of *its* imports absent, which is what happens when a
+        # domain's optional dependency is not installed. Neither may escape as a bare
+        # ModuleNotFoundError: an ungoverned crash is not a declared outcome.
+        try:
+            mod = importlib.import_module(module_path)
+        except ModuleNotFoundError as exc:
+            missing = exc.name or ""
+            if missing == module_path or module_path.startswith(missing + "."):
+                raise CTArtifactNotFound(
+                    f"handler_ref names module {module_path!r} for atom "
+                    f"{step.get('atom')!r} and it is not importable",
+                    cause=exc,
+                ) from exc
+            raise CTExecutionError(
+                f"handler_ref module {module_path!r} for atom {step.get('atom')!r} requires "
+                f"{missing!r}, which is not installed — the domain's optional dependency is "
+                f"missing, not the transform"
+            ) from exc
+        except ImportError as exc:
+            raise CTExecutionError(
+                f"handler_ref module {module_path!r} for atom {step.get('atom')!r} "
+                f"failed to import: {exc}"
+            ) from exc
+
+        try:
+            execute_fn = getattr(mod, callable_name)
+        except AttributeError as exc:
+            raise CTArtifactNotFound(
+                f"handler_ref names callable {callable_name!r} in {module_path!r} for atom "
+                f"{step.get('atom')!r} and the module does not define it",
+                cause=exc,
+            ) from exc
 
         # Adapter logic (migrated from atom_registry._register_execute_atom):
         # Resolve $.path references; skip reserved and metadata keys.
