@@ -1,0 +1,8 @@
+exclude *.log
+exclude *.jsonl
+exclude *.sh
+
+prune scripts
+prune testbed
+
+global-exclude __pycache__ *.pyc
