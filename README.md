@@ -125,7 +125,7 @@ Apache-2.0. See `LICENSE` and `NOTICE`.
 | `pgc-workloads` | `conformance_workloads` | the workloads that make conformance observable |
 | `pgc-domains` | `business_domains` | the business domain implementations the composed snapshot binds |
 
-`pip install pgc` brings in the whole family.
+`pip install protocol-governed-computing` brings in the whole family.
 
 **Installing the toolchain is one of two steps.** The compiler resolves the governance surface from
 `PGC_PLATFORM_ROOT` — fail-hard, cwd-independent, zero inference — so the *declarations* come from a
@@ -147,9 +147,9 @@ pgc            # reports what is installed and whether the anchor resolves
   composition rather than each repo: they release together and the governance closure forces lockstep,
   so the ordinal names which composition a repo belongs to. Development happens on `dev/<N>` and each
   cycle is tagged `release-<N>`. This is not published.
-- **Public** — `PUBLIC_VERSION`, tagged on every component repository. The platform is at **`v2`**.
+- **Public** — `PUBLIC_VERSION`, tagged on every component repository. The platform is at **`v3`**.
 
-**The published version is the public one: `v2` is `2.0.0`.** The standard the packages implement is a
+**The published version is the public one: `v3` is `3.0.0`.** The standard the packages implement is a
 separate artifact on its own track and is not this number.
 
 The standard these packages implement is published separately: https://doi.org/10.5281/zenodo.22150616
