@@ -159,7 +159,7 @@ The full sequence, with the repositories it needs, is in
   cycle is tagged `release-<N>`. This is not published.
 - **Public** — `PUBLIC_VERSION`, tagged on every component repository. The platform is at **`v3`**.
 
-**The published version is the public one: `v3` is `3.0.0`.** The standard the packages implement is a
+**The published version is the public one: `v4` is `4.0.0`.** The standard the packages implement is a
 separate artifact on its own track and is not this number.
 
 The standard these packages implement is published separately: https://doi.org/10.5281/zenodo.22150616
