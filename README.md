@@ -138,8 +138,18 @@ export PGC_PLATFORM_ROOT=$PWD/software_governance
 pgc            # reports what is installed and whether the anchor resolves
 ```
 
-`PGC_BUILD_ROOT` (compiled output, keeping the governance repo read-only) and `PGC_DOMAIN_ROOTS`
-(additional domains contributing their own `registry/structures`) are optional.
+`PGC_DOMAIN_ROOTS` names an additional domain contributing its own `registry/structures` — the
+directory that *directly contains* it, not the repository above it; pointing one level too high is a
+silent no-op. `PGC_SNAPSHOT_ROOT` is where compiled output is written, and each domain build needs
+its own: every layer's output consolidates into one root, and verification rejects any file in that
+root the current build did not declare. `PGC_SNAPSHOT_PROFILES` is the directory holding snapshot
+profiles, required by the assembler and the runtime alike.
+
+`PGC_BUILD_ROOT` is accepted and reported and **nothing reads it** — `PGC_SNAPSHOT_ROOT` is the
+anchor that controls output.
+
+The full sequence, with the repositories it needs, is in
+[`pgc_install`](https://github.com/protocol-governed-computing/pgc_install).
 
 **Versioning.** Two schemes, and the published version follows the second.
 

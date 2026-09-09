@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from runtime.boot import boot, default_snapshot_root, _composite_hash
+from runtime.boot import boot, default_snapshot_root
 
 SNAPSHOT_ROOT = default_snapshot_root()
 _HAVE_SNAPSHOT = (SNAPSHOT_ROOT / "manifest.json").exists()
@@ -38,13 +38,17 @@ class WarmBootTest(unittest.TestCase):
         booted = boot(SNAPSHOT_ROOT)
         self.assertEqual(booted.snapshot_id, booted.manifest["composite_hash"])
 
-    def test_composite_recompute_matches_manifest(self):
-        # verifier independence: recompute from the identity view, must equal the manifest's claim
+    def test_manifest_states_one_identity(self):
+        """The manifest states its identity twice; the two statements must agree.
+
+        This replaces a recompute-from-the-identity-view check. The runtime used to carry its own
+        composite over the manifest's RECORDED per-domain hashes — weaker than the assembler's,
+        which covers constituents and the claimed profile as well — so it could never match, and
+        the assertion had been red unnoticed because nothing ran this file. One determination has
+        one implementation (`assembler.core`), and what is checkable here is self-agreement.
+        """
         booted = boot(SNAPSHOT_ROOT)
-        self.assertEqual(
-            _composite_hash(booted.manifest["domains"]),
-            booted.manifest["composite_hash"],
-        )
+        self.assertEqual(booted.manifest["composite_hash"], booted.manifest["snapshot_id"])
 
     def test_platform_domain_has_capability_substrate(self):
         booted = boot(SNAPSHOT_ROOT)

@@ -2,7 +2,7 @@
 boot.py — warm reboot: bring the assembled snapshot resident and hash-verified.
 
 The manifest is the ROOT OF TRUST. The runtime boots *through* it, never by scanning the
-filesystem. Contract: snapshot_assembler/doc/SNAPSHOT_ASSEMBLY_CONTRACT.md
+filesystem. Contract: snapshot_assembler/CONTRACT.md
 
 Boot sequence:
     1. load manifest.json
@@ -74,29 +74,6 @@ def default_snapshot_root() -> Path:
 
 
 # --- composite hash: independent reimplementation of the assembly contract -----------------
-
-def _identity_view(domains: list[dict]) -> list[dict]:
-    view = [
-        {
-            "domain": d["domain"],
-            "tokenized_projection_hash":  d["projections"]["tokenized"]["projection_hash"],
-            "vocabulary_projection_hash": d["projections"]["vocabulary"]["projection_hash"],
-            # Canonical joins the view because every other member is graph-derived, and STRUCTURE
-            # artifacts never enter the semantic graph — without it a STRUCTURE artifact could
-            # change inside a sealed snapshot and boot would still attest the same identity.
-            "canonical_projection_hash":  d["projections"]["canonical"]["projection_hash"],
-            "attestation_hash":           d["projections"]["trust"]["attestation_hash"],
-            "graph_address_hash":         d["graph_address_hash"],
-        }
-        for d in domains
-    ]
-    return sorted(view, key=lambda e: e["domain"])
-
-
-def _composite_hash(domains: list[dict]) -> str:
-    canonical = json.dumps(_identity_view(domains), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
 
 def _load_manifest(snapshot_root: Path) -> dict:
     path = snapshot_root / "manifest.json"
