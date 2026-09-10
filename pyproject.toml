@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pgc-runtime"
+version = "4.0.0"
+description = "PGC protocol runtime — executes a sealed snapshot as governed DAG traversal and emits traces (import package: runtime)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Bhash Ganti", email = "bachipeachy@gmail.com" }]
+
+keywords = ["protocol-governed-computing", "pgc", "protocol", "runtime", "workflow", "execution"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+  "Topic :: System :: Distributed Computing",
+]
+
+# The runtime binds capability implementations by fully qualified module path at
+# execution — those modules ship in pgc-governance. It is not a hard dependency:
+# a composition may bind implementations from any installed domain package, and
+# which ones are required is a property of the snapshot, not of this package.
+dependencies = []
+
+[project.optional-dependencies]
+reference = ["pgc-governance>=2.0.0"]
+
+[project.scripts]
+protocol_runtime = "runtime.cli:main"
+
+[project.urls]
+Homepage = "https://omnibachi.org/"
+Repository = "https://github.com/protocol-governed-computing/protocol_runtime"
+Standard = "https://doi.org/10.5281/zenodo.22150616"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["runtime*"]
+exclude = ["testbed*", "scripts*", "*.tests"]
