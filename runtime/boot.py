@@ -107,6 +107,42 @@ def boot(snapshot_root: str | Path | None = None) -> BootedSnapshot:
         raise RuntimeError(f"Snapshot refused at acceptance: {exc}") from exc
     recomputed = manifest.get("snapshot_id")
 
+    # 2a. AUTHENTICATION — who vouches for what acceptance just established.
+    #
+    # Acceptance answers whether this snapshot is internally whole. It cannot answer who sealed
+    # it: a party who replaced every constituent and recomputed the identity produces a snapshot
+    # that accepts perfectly. Authentication is the separate question, and it is answered against
+    # a key this node holds rather than anything the snapshot carries — a snapshot bearing the key
+    # that authenticates it authenticates nothing, because whoever replaced the snapshot would
+    # replace the key with it.
+    #
+    # Holding an anchor is what makes a node require one. A platform whose profile does not select
+    # signing boots an unsigned snapshot exactly as before; this adds a condition to nodes that
+    # have taken one on, and none to nodes that have not.
+    #
+    # Imported from the assembler for the same reason acceptance is: one determination, two
+    # callers, rather than a second implementation that can disagree with the first.
+    anchor = os.environ.get("PGC_TRUST_ROOT_PUBKEY")
+    if anchor:
+        from assembler import signing
+
+        try:
+            record = signing.read_signature(root)
+        except signing.SignatureMalformed as exc:
+            raise RuntimeError(f"Snapshot refused at authentication: {exc}") from exc
+        if record is None:
+            raise RuntimeError(
+                "Snapshot refused at authentication: this node anchors a trust root and the "
+                "snapshot carries no signature. An unsigned snapshot is not one this node accepts."
+            )
+        try:
+            key = signing.verify_identity(recomputed, record, Path(anchor))
+        except (signing.SignatureError, signing.SigningUnavailable, OSError) as exc:
+            raise RuntimeError(
+                f"Snapshot refused at authentication: {type(exc).__name__}: {exc}"
+            ) from exc
+        print(f"[runtime] Authenticated under trust root {key}")
+
     # 3-4. per-domain load, anchored to the manifest's tokenized hash
     domains: dict[str, RuntimePackage] = {}
     for d in domains_meta:
