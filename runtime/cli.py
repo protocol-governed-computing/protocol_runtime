@@ -91,6 +91,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Assembled snapshot root (or set PGC_SNAPSHOT_ROOT); default: sibling ../snapshot",
     )
 
+    # ── coordinator / worker (FEDERATED_NODE placement) ──────────
+    co_p = subs.add_parser("coordinator", help="Serve as the coordinating node of a federated node group")
+    wk_p = subs.add_parser("worker", help="Serve as a worker node of a federated node group")
+    for p in (co_p, wk_p):
+        p.add_argument("--snapshot", metavar="PATH", help="Assembled snapshot root (or PGC_SNAPSHOT_ROOT)")
+        p.add_argument("--data-root", dest="data_root", metavar="PATH",
+                       help="Evidence store mount (or PGC_DATA_ROOT)")
+    co_p.add_argument("--bind", default=os.environ.get("PGC_COORDINATOR_BIND", "127.0.0.1"))
+    co_p.add_argument("--port", type=int, default=int(os.environ.get("PGC_COORDINATOR_PORT", "8100")))
+    wk_p.add_argument("--coordinator", metavar="URL", help="Coordinator URL (or PGC_COORDINATOR_URL)")
+    wk_p.add_argument("--id", dest="worker_id", metavar="NAME", help="Worker identity; default: hostname")
+
     # ── examine ───────────────────────────────────────────────────
     ex_p = subs.add_parser("examine", help="Analyze a completed trace file")
     ex_p.add_argument(
@@ -215,6 +227,41 @@ def _handle_boot(args: argparse.Namespace) -> None:
     print("=" * 60)
     print(_health_line(snapshot_root, booted))
     print("=" * 60)
+
+
+def _federation_roots(args: argparse.Namespace) -> tuple[Path, Path]:
+    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
+    data_str = args.data_root or os.environ.get("PGC_DATA_ROOT")
+    if not snapshot_str or not data_str:
+        _fatal("a federated node needs --snapshot (PGC_SNAPSHOT_ROOT) and --data-root (PGC_DATA_ROOT)")
+    return Path(snapshot_str), Path(data_str)
+
+
+def _handle_coordinator(args: argparse.Namespace) -> None:
+    from runtime.coordinator import CoordinationRefused
+    from runtime.federation.coordinator import FederatedCoordinator, serve
+
+    snapshot_root, data_root = _federation_roots(args)
+    try:
+        coordinator = FederatedCoordinator(snapshot_root, data_root)
+    except (CoordinationRefused, RuntimeError, FileNotFoundError) as exc:
+        _fatal(f"coordinator refused to start: {exc}")
+    serve(coordinator, args.bind, args.port)
+
+
+def _handle_worker(args: argparse.Namespace) -> None:
+    from runtime.coordinator import CoordinationRefused
+    from runtime.federation.worker import FederatedWorker
+
+    snapshot_root, data_root = _federation_roots(args)
+    url = args.coordinator or os.environ.get("PGC_COORDINATOR_URL")
+    if not url:
+        _fatal("a worker needs --coordinator (PGC_COORDINATOR_URL)")
+    try:
+        worker = FederatedWorker(snapshot_root, data_root, url.rstrip("/"), args.worker_id)
+    except (CoordinationRefused, RuntimeError, FileNotFoundError) as exc:
+        _fatal(f"worker refused to start: {exc}")
+    worker.run_forever()
 
 
 def _health_line(snapshot_root: Path, booted) -> str:
@@ -377,6 +424,10 @@ def main() -> None:
         _handle_run(args)
     elif args.command == "boot":
         _handle_boot(args)
+    elif args.command == "coordinator":
+        _handle_coordinator(args)
+    elif args.command == "worker":
+        _handle_worker(args)
     elif args.command == "examine":
         _handle_examine(args)
     elif args.command == "behavior-logic":

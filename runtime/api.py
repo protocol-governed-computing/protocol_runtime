@@ -8,11 +8,13 @@ stdout or data files.
 """
 from __future__ import annotations
 
+import functools
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from runtime.boot import boot
+from runtime.boot import boot, default_snapshot_root
 from runtime.evidence import TraceWriter, make_trace_id
 from runtime.scheduler import run_wf
 
@@ -69,3 +71,52 @@ def run_workflow(
         writer.close()
 
     return RunResult(status=status, surface=surface or {}, trace_id=trace_id, trace_dir=trace_dir)
+
+
+@functools.lru_cache(maxsize=8)
+def _placement(snapshot_root: Path) -> str | None:
+    # The snapshot is immutable, so what it was permitted cannot change under a running process.
+    from runtime.coordinator import sealed_placement_mode
+    return sealed_placement_mode(snapshot_root)
+
+
+def invoke_workflow(
+    *,
+    wf_fqdn: str,
+    payload: dict[str, Any],
+    data_root: str | Path,
+    snapshot_root: str | Path | None = None,
+    timeout: float = 60.0,
+) -> RunResult:
+    """Have a workflow executed wherever the sealed composition places execution.
+
+    The entry point for a party that receives work but is not itself where work is placed — the
+    interaction boundary. Under `FEDERATED_NODE` the unit goes to the coordinator named by
+    `PGC_COORDINATOR_URL` and a worker executes it; under every other placement it runs here through
+    `run_workflow`. Either way the result is the same `RunResult`, with `trace_dir` under the shared
+    `data_root`.
+
+    Placement is read from the snapshot, not from configuration: a boundary that chose its own
+    arrangement would be granting itself what the composition was or was not permitted. Execution
+    itself never consults placement — this decides only where `run_workflow` is called.
+    """
+    root = Path(snapshot_root) if snapshot_root is not None else default_snapshot_root()
+    if _placement(root.resolve()) != "FEDERATED_NODE":
+        return run_workflow(wf_fqdn=wf_fqdn, payload=payload, data_root=data_root, snapshot_root=root)
+
+    from runtime.federation.client import submit_and_wait
+
+    coordinator_url = os.environ.get("PGC_COORDINATOR_URL")
+    if not coordinator_url:
+        raise RuntimeError(
+            "the snapshot places execution on FEDERATED_NODE and PGC_COORDINATOR_URL is not set: "
+            "this node does not execute, and has nowhere to send the work."
+        )
+    booted = boot(root)     # a boundary acts on no snapshot it has not authenticated (OB-1)
+    outcome = submit_and_wait(coordinator_url.rstrip("/"), wf_fqdn=wf_fqdn, payload=payload,
+                              snapshot_id=booted.snapshot_id, timeout=timeout)
+    if outcome.get("state") != "executed":
+        raise RuntimeError(f"unit {outcome.get('unit_id')} failed on {outcome.get('worker')}: "
+                           f"{outcome.get('detail')}")
+    return RunResult(status=outcome["status"], surface=outcome.get("surface") or {},
+                     trace_id=outcome["trace_id"], trace_dir=Path(data_root) / outcome["trace_dir"])
