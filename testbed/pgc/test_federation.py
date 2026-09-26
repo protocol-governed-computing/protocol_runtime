@@ -187,6 +187,64 @@ class FederationTest(unittest.TestCase):
         code, _ = coordinator.submit({"wf_fqdn": WF, "payload": PAYLOAD, "snapshot_id": "0" * 64})
         self.assertEqual(code, 409)
 
+    # ── block, never misreport (EO-2) ───────────────────────────
+
+    def test_boundary_waits_for_an_admitted_unit_rather_than_failing(self):
+        """No worker drains the queue for a while; the boundary waits and then reports the outcome."""
+        data = self._store("stall")
+        url, _ = self._start_coordinator(data)
+        os.environ["PGC_COORDINATOR_URL"] = url
+        self.addCleanup(os.environ.pop, "PGC_COORDINATOR_URL")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(invoke_workflow, wf_fqdn=WF, payload=PAYLOAD, data_root=data,
+                                  snapshot_root=self.snapshot)
+            time.sleep(3)
+            self.assertFalse(pending.done(), "the boundary answered before any worker ran the unit")
+            self._start_worker(data, url, "late")
+            self.assertEqual(pending.result(timeout=60).status, "SUCCESS")
+
+    def test_boundary_waits_on_a_coordinator_slower_than_any_fixed_limit(self):
+        """A coordinator blocked on the store answers late; the answer is still the one reported."""
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        from runtime.federation.client import submit_and_wait
+
+        class Stalled(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code, body):
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                time.sleep(12)          # longer than the 10 s the boundary once allowed
+                self._send(202, {"unit_id": "late"})
+
+            def do_GET(self):
+                self._send(200, {"unit_id": "late", "state": "executed", "status": "SUCCESS"})
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Stalled)
+        Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)     # cleanups run last-in first-out: shut down, then close
+        self.addCleanup(server.shutdown)
+        outcome = submit_and_wait(f"http://127.0.0.1:{server.server_port}", wf_fqdn=WF,
+                                  payload=PAYLOAD, snapshot_id="x")
+        self.assertEqual(outcome["status"], "SUCCESS")
+
+    def test_boundary_fails_only_when_nothing_was_admitted(self):
+        data = self._store("unadmitted")
+        Store(data).require_writable()
+        os.environ["PGC_COORDINATOR_URL"] = f"http://127.0.0.1:{_free_port()}"
+        self.addCleanup(os.environ.pop, "PGC_COORDINATOR_URL")
+        with self.assertRaisesRegex(CoordinationRefused, "not reachable"):
+            invoke_workflow(wf_fqdn=WF, payload=PAYLOAD, data_root=data, snapshot_root=self.snapshot)
+        self.assertEqual(Store(data).queued(), [], "a unit was admitted although failure was reported")
+
 
 if __name__ == "__main__":
     unittest.main()

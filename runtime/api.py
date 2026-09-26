@@ -86,7 +86,6 @@ def invoke_workflow(
     payload: dict[str, Any],
     data_root: str | Path,
     snapshot_root: str | Path | None = None,
-    timeout: float = 60.0,
 ) -> RunResult:
     """Have a workflow executed wherever the sealed composition places execution.
 
@@ -95,6 +94,9 @@ def invoke_workflow(
     `PGC_COORDINATOR_URL` and a worker executes it; under every other placement it runs here through
     `run_workflow`. Either way the result is the same `RunResult`, with `trace_dir` under the shared
     `data_root`.
+
+    Under `FEDERATED_NODE` this waits for the unit's outcome without limit once it is admitted, so
+    a failure it raises is always one in which nothing was admitted (see `submit_and_wait`).
 
     Placement is read from the snapshot, not from configuration: a boundary that chose its own
     arrangement would be granting itself what the composition was or was not permitted. Execution
@@ -114,7 +116,7 @@ def invoke_workflow(
         )
     booted = boot(root)     # a boundary acts on no snapshot it has not authenticated (OB-1)
     outcome = submit_and_wait(coordinator_url.rstrip("/"), wf_fqdn=wf_fqdn, payload=payload,
-                              snapshot_id=booted.snapshot_id, timeout=timeout)
+                              snapshot_id=booted.snapshot_id)
     if outcome.get("state") != "executed":
         raise RuntimeError(f"unit {outcome.get('unit_id')} failed on {outcome.get('worker')}: "
                            f"{outcome.get('detail')}")
