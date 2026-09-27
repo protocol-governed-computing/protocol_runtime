@@ -92,6 +92,13 @@ def _build_parser() -> argparse.ArgumentParser:
     rp_p.add_argument("--snapshot", dest="snapshot", metavar="PATH",
                       help="The assembled snapshot the original ran against")
 
+    cf_p = subs.add_parser(
+        "conformance",
+        help="Run a compiled domain's test vectors and report each transform proven, unproven or refused",
+    )
+    cf_p.add_argument("domain_root", metavar="DOMAIN_ROOT",
+                      help="The domain's root, holding the snapshot/compiled its compile wrote")
+
     # ── boot ──────────────────────────────────────────────────────
     boot_p = subs.add_parser(
         "boot",
@@ -446,6 +453,24 @@ def _handle_replay(args) -> None:
     sys.exit(0 if same else 1)
 
 
+def _handle_conformance(args) -> None:
+    """Prove a compiled domain's transforms. Exit 1 when any is refused; unproven is reported, not refused."""
+    from runtime.conformance import run_domain, write_result
+    root = Path(args.domain_root).resolve()
+    result = run_domain(root)
+    out = write_result(root, result)
+    for case in result.cases:
+        if not case.passed:
+            print(f"  FAIL  {case.fqdn}: {case.error}")
+    print(f"[conformance] {result.domain}: {len(result.proven)} proven, {len(result.unproven)} unproven, "
+          f"{len(result.refused)} refused, {len(result.carried)} carried from another surface "
+          f"({len(result.cases)} case(s))")
+    for fqdn in result.unproven:
+        print(f"  UNPROVEN  {fqdn}")
+    print(f"  result -> {out}")
+    sys.exit(0 if result.admitted else 1)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -454,6 +479,8 @@ def main() -> None:
         _handle_run(args)
     elif args.command == "replay":
         _handle_replay(args)
+    elif args.command == "conformance":
+        _handle_conformance(args)
     elif args.command == "boot":
         _handle_boot(args)
     elif args.command == "coordinator":
