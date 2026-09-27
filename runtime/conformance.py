@@ -1,11 +1,17 @@
 """
-conformance.py — transform conformance, run in the build of the domain that supplies the transforms.
+conformance.py — transform conformance, run in the build that supplies the transforms.
 
-A domain's vectors (TEST_DATA) are compiled into runnable cases, each bound to its transform exactly as
-the composition sealed it. This runs every case of one domain and reports every transform the domain
-declares as **proven** (every case ran and passed), **unproven** (no vector tests it) or **refused** (a
-case failed). It never reports success over nothing: a domain with no vector is reported, by name, as
-unproven. Governed by `conformance::CONSTITUTION_TEST_DATA_V1`.
+A build's vectors (TEST_DATA) are compiled into runnable cases, each bound to its transform exactly as
+the composition sealed it. This runs every case of one build and reports every transform the build
+supplies as **proven** (every case ran and passed), **unproven** (no vector tests it) or **refused** (a
+case failed). It never reports success over nothing: a build with no vector is reported, by name, as
+unproven. The build is a domain's, or the platform's for the transforms the platform supplies.
+Governed by `conformance::CONSTITUTION_TEST_DATA_V2`.
+
+What a build supplies and what it only carries is read from the capabilities its attestation records
+as imported, never from a transform's name: a carried copy is byte-identical to its supplier's, and the
+platform's transforms are not named for the platform. A build with any failed case is refused, whoever
+supplies the transform the case tests.
 
 A case for a molecule supplies the recorded result of each non-deterministic step. The executor
 substitutes it and never runs the step; this confirms, through the step observer, that every supplied
@@ -24,8 +30,8 @@ from typing import Any
 from runtime.ct_executor import CTExecutor, CTExecutionError
 
 NONDETERMINISTIC_PURITY = "ct_impure"
-# Where a domain's result is written, beside its compiled projections, so the assembler carries it into
-# the composition as evidence of its own — apart from composition conformance, and outside identity.
+# Where a build's result is written, beside its compiled projections, so the assembler carries it into
+# the composition as evidence of its own — apart from composition conformance.
 RESULT_DIR = "transform_conformance"
 RESULT_FILE = "result.json"
 
@@ -49,8 +55,9 @@ class DomainResult:
 
     @property
     def admitted(self) -> bool:
-        """A domain is admitted when nothing was refused. Unproven is reported, never refused."""
-        return not self.refused
+        """A build is admitted when nothing was refused and no case failed, whoever supplies the
+        transform a case tests. Unproven is reported, never refused."""
+        return not self.refused and all(c.passed for c in self.cases)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -61,7 +68,7 @@ class DomainResult:
             "proven": self.proven,
             "unproven": self.unproven,
             "refused": self.refused,
-            # Transforms this domain carries from another's surface. Their proof belongs to the domain
+            # Transforms this build carries from another's surface. Their proof belongs to the build
             # that supplies them, so they are named here rather than counted either way.
             "carried": self.carried,
             "cases": [{"case": c.fqdn, "passed": c.passed, **({"error": c.error} if c.error else {})}
@@ -199,14 +206,22 @@ def _canonical(compiled: Path, kind_dir: str) -> list[dict[str, Any]]:
     return [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))] if folder.is_dir() else []
 
 
-def _build_manifest(compiled: Path) -> dict[str, Any]:
+def _build_manifest(compiled: Path, structure: str | None = None) -> dict[str, Any]:
+    """The build manifest this build was compiled from.
+
+    A domain compiles one. The platform compiles every build declaration its surface holds, so its
+    build names the one it was compiled from; a build compiling several and naming none is refused.
+    """
     manifests = [a for a in _canonical(compiled, "structures")
                  if "::STRUCTURE_BUILD_" in a.get("fqdn_id", "") and a.get("fqdn_id", "").endswith(
                      tuple(f"_CONFIG_V{n}" for n in range(10)))]
+    if structure:
+        manifests = [a for a in manifests if a["fqdn_id"].split("::")[1] == structure]
     if len(manifests) != 1:
         raise FileNotFoundError(
-            f"expected one compiled build manifest under {compiled / 'canonical' / 'structures'}, "
-            f"found {len(manifests)}")
+            f"expected one compiled build manifest{f' {structure}' if structure else ''} under "
+            f"{compiled / 'canonical' / 'structures'}, found {len(manifests)}; a build compiling several "
+            f"names the one it was compiled from")
     return manifests[0]
 
 
@@ -261,19 +276,34 @@ def _run_case(executor: CTExecutor, case: dict[str, Any]) -> CaseResult:
     return CaseResult(fqdn, True)
 
 
-def run_domain(domain_root: Path) -> DomainResult:
-    """Run every case of one compiled domain, and say what it proved about each of its transforms."""
-    snapshot = domain_root / "snapshot"
+def _carried(compiled: Path, domain: str) -> set[str]:
+    """The capabilities this build carried in, as its attestation records them. Absent means none."""
+    attestation = compiled / "trust" / domain / "structure_attestation.json"
+    if not attestation.is_file():
+        raise FileNotFoundError(f"no attestation at {attestation}; conformance runs after a compile")
+    return set(json.loads(attestation.read_text()).get("imported_capabilities", []))
+
+
+def run_domain(domain_root: Path, snapshot_root: Path | None = None,
+               structure: str | None = None) -> DomainResult:
+    """Run every case of one compiled build, and say what it proved about each transform it supplies.
+
+    `snapshot_root` is where the build wrote, when not `<domain_root>/snapshot` — a placement build of
+    the platform writes to a root of its own. `structure` names the build manifest the build was
+    compiled from, when it compiled more than one.
+    """
+    snapshot = snapshot_root or domain_root / "snapshot"
     compiled = snapshot / "compiled"
     if not compiled.is_dir():
-        raise FileNotFoundError(f"no compiled domain at {compiled}; conformance runs after a compile")
-    manifest = _build_manifest(compiled)
+        raise FileNotFoundError(f"no compiled build at {compiled}; conformance runs after a compile")
+    manifest = _build_manifest(compiled, structure)
     domain = manifest.get("frontmatter", {}).get("structure_scope") or manifest.get("namespace", "")
     result = DomainResult(domain=domain)
 
     transforms = [a for a in _canonical(compiled, "capability_transforms") if a.get("artifact_type") == "CT"]
-    own = sorted(a["fqdn_id"] for a in transforms if a["fqdn_id"].split("::")[0] == domain)
-    result.carried = sorted(a["fqdn_id"] for a in transforms if a["fqdn_id"].split("::")[0] != domain)
+    carried = _carried(compiled, domain)
+    own = sorted(a["fqdn_id"] for a in transforms if a["fqdn_id"] not in carried)
+    result.carried = sorted(a["fqdn_id"] for a in transforms if a["fqdn_id"] in carried)
 
     vectors = [a for a in _canonical(compiled, "test_data")]
     targets = {a.get("frontmatter", {}).get("target") for a in vectors}
@@ -309,9 +339,9 @@ def run_domain(domain_root: Path) -> DomainResult:
     return result
 
 
-def write_result(domain_root: Path, result: DomainResult) -> Path:
-    """Write the result beside the domain's compiled projections, where the assembler carries it."""
-    out_dir = domain_root / "snapshot" / "compiled" / RESULT_DIR
+def write_result(domain_root: Path, result: DomainResult, snapshot_root: Path | None = None) -> Path:
+    """Write the result beside the build's compiled projections, where the assembler carries it."""
+    out_dir = (snapshot_root or domain_root / "snapshot") / "compiled" / RESULT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / RESULT_FILE
     out.write_text(json.dumps(result.as_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")

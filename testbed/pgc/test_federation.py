@@ -1,7 +1,7 @@
 """
 FEDERATED_NODE placement — a coordinator and workers meeting only at a shared evidence store.
 
-Builds a federated composition from the compiled roots (`STRUCTURE_BUILD_PLATFORM_FEDERATED_CONFIG_V1`
+Builds a federated composition from the compiled roots (`STRUCTURE_BUILD_PLATFORM_FEDERATED_CONFIG_V2`
 output + collatz + the inspection tool domain), then runs the coordinator and two workers as separate
 processes over one store directory, the arrangement the node group realizes across hosts. Skips when
 the compiled roots are absent.

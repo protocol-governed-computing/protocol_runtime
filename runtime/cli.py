@@ -98,6 +98,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     cf_p.add_argument("domain_root", metavar="DOMAIN_ROOT",
                       help="The domain's root, holding the snapshot/compiled its compile wrote")
+    cf_p.add_argument("--snapshot-root", dest="snapshot_root", metavar="PATH",
+                      help="Where the build wrote, when not DOMAIN_ROOT/snapshot (a placement build's own root)")
+    cf_p.add_argument("--structure", dest="structure", metavar="STRUCTURE_CODE",
+                      help="The build manifest the build was compiled from, when it compiled more than one")
 
     # ── boot ──────────────────────────────────────────────────────
     boot_p = subs.add_parser(
@@ -454,11 +458,13 @@ def _handle_replay(args) -> None:
 
 
 def _handle_conformance(args) -> None:
-    """Prove a compiled domain's transforms. Exit 1 when any is refused; unproven is reported, not refused."""
+    """Prove a compiled build's transforms. Exit 1 when any is refused or any case failed; unproven is
+    reported, not refused."""
     from runtime.conformance import run_domain, write_result
     root = Path(args.domain_root).resolve()
-    result = run_domain(root)
-    out = write_result(root, result)
+    snapshot_root = Path(args.snapshot_root).resolve() if args.snapshot_root else None
+    result = run_domain(root, snapshot_root, args.structure)
+    out = write_result(root, result, snapshot_root)
     for case in result.cases:
         if not case.passed:
             print(f"  FAIL  {case.fqdn}: {case.error}")

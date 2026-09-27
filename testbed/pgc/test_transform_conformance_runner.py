@@ -1,11 +1,14 @@
 """
 The transform conformance runner — the runtime's half of software_governance/dossiers/transform_conformance.
 
-A compiled domain is laid out as its build leaves it: a build manifest, its transforms, its vectors and
-the runnable cases the compiler wrote from them. Shown here: a molecule with a non-deterministic step is
-proven from its recorded results and the step never runs; a case missing a record, or carrying one no
-step used, refuses its transform; a transform no vector tests is named unproven and never counted as
-passing; a vector nothing was compiled from refuses; and a domain with no vectors is reported, not passed.
+A compiled build is laid out as its build leaves it: a build manifest, its attestation, its transforms,
+its vectors and the runnable cases the compiler wrote from them. Shown here: a molecule with a
+non-deterministic step is proven from its recorded results and the step never runs; a case missing a
+record, or carrying one no step used, refuses its transform; a transform no vector tests is named
+unproven and never counted as passing; a vector nothing was compiled from refuses; a domain with no
+vectors is reported, not passed; what a build supplies is read from what its attestation records as
+carried, never from a name, so the platform judges transforms not named for it; and a failed case for a
+carried transform refuses the build.
 """
 
 import json
@@ -53,17 +56,25 @@ def _case(target, case_id, ct_ir, bindings, outcome="SUCCESS", expected=None, re
     return out
 
 
-def _domain(root: Path, cases: list[dict], vectors: list[str], declare=True) -> Path:
+CARRIED = "capability_transforms::CT_PURE_LOOKUP_V0"
+
+
+def _domain(root: Path, cases: list[dict], vectors: list[str], declare=True, scope=DOMAIN,
+            carried=(CARRIED,)) -> Path:
     compiled = root / "snapshot" / "compiled"
     canonical = compiled / "canonical"
     for folder in ("structures", "capability_transforms", "test_data"):
         (canonical / folder).mkdir(parents=True)
-    frontmatter = {"structure_scope": DOMAIN}
+    trust = compiled / "trust" / scope
+    trust.mkdir(parents=True)
+    attestation = {"structure_id": scope, **({"imported_capabilities": list(carried)} if carried else {})}
+    (trust / "structure_attestation.json").write_text(json.dumps(attestation))
+    frontmatter = {"structure_scope": scope}
     if declare:
         frontmatter["output_configuration"] = {"conformance": {"subpath": "compiled/transform_conformance"}}
     (canonical / "structures" / "m.json").write_text(json.dumps(
-        {"fqdn_id": f"{DOMAIN}::STRUCTURE_BUILD_PROBE_CONFIG_V0", "frontmatter": frontmatter}))
-    for fqdn in (WRITE, CHOOSE, IDLE, "capability_transforms::CT_PURE_LOOKUP_V0"):
+        {"fqdn_id": f"{scope}::STRUCTURE_BUILD_PROBE_CONFIG_V0", "frontmatter": frontmatter}))
+    for fqdn in (WRITE, CHOOSE, IDLE, CARRIED):
         (canonical / "capability_transforms" / f"{fqdn.replace('::', '__')}.json").write_text(
             json.dumps({"artifact_type": "CT", "fqdn_id": fqdn}))
     for target in vectors:
@@ -86,9 +97,9 @@ GOOD = [
 
 class RunnerTest(unittest.TestCase):
 
-    def _run(self, cases, vectors=(WRITE, CHOOSE), declare=True):
+    def _run(self, cases, vectors=(WRITE, CHOOSE), declare=True, **layout):
         with tempfile.TemporaryDirectory() as tmp:
-            root = _domain(Path(tmp), cases, list(vectors), declare)
+            root = _domain(Path(tmp), cases, list(vectors), declare, **layout)
             result = run_domain(root)
             written = json.loads(write_result(root, result).read_text())
             return result, written
@@ -102,7 +113,7 @@ class RunnerTest(unittest.TestCase):
     def test_an_untested_transform_is_named_unproven_and_a_carried_one_is_named_carried(self):
         result, written = self._run(GOOD)
         self.assertEqual(result.unproven, [IDLE])
-        self.assertEqual(result.carried, ["capability_transforms::CT_PURE_LOOKUP_V0"])
+        self.assertEqual(result.carried, [CARRIED])
         self.assertTrue(result.admitted)
         self.assertEqual(written["counts"], {"proven": 2, "unproven": 1, "refused": 0,
                                              "cases": 2, "cases_failed": 0})
@@ -134,6 +145,20 @@ class RunnerTest(unittest.TestCase):
     def test_a_vector_with_no_compiled_case_refuses(self):
         result, _ = self._run(GOOD, vectors=(WRITE, CHOOSE, IDLE))
         self.assertIn(IDLE, result.refused)
+
+    def test_what_a_build_supplies_is_read_from_its_attestation_never_from_a_name(self):
+        # The platform's transforms are not named for the platform; carrying nothing, it supplies all.
+        result, _ = self._run(GOOD, scope="platform", carried=())
+        self.assertEqual(result.proven, [CHOOSE, WRITE])
+        self.assertEqual(result.unproven, [CARRIED, IDLE])
+        self.assertEqual(result.carried, [])
+
+    def test_a_failed_case_for_a_carried_transform_refuses_the_build(self):
+        lookup = _case(CARRIED, "wrong", _choose_ir(), {}, outcome="SUCCESS", expected={"text": "x"})
+        result, _ = self._run([*GOOD, lookup])
+        self.assertEqual(result.carried, [CARRIED])
+        self.assertNotIn(CARRIED, result.refused + result.proven + result.unproven)
+        self.assertFalse(result.admitted)
 
     def test_a_domain_with_no_vectors_is_reported_never_passed(self):
         result, written = self._run([], vectors=(), declare=False)
