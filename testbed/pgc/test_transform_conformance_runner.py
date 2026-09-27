@@ -127,6 +127,17 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(CALLS["offer"], 0)
         self.assertIn("no recorded result", next(c.error for c in result.cases if not c.passed))
 
+    def test_a_transform_whose_implementation_is_absent_is_refused_and_named(self):
+        absent = _choose_ir()
+        absent["atom_stream"][0]["handler_ref"] = {"module": "probe_absent_atoms", "callable": "choose"}
+        cases = [GOOD[0],
+                 _case(CHOOSE, "absent_expecting_refusal", absent, {}, outcome="VIOLATION")]
+        result, written = self._run(cases)
+        self.assertEqual(result.refused, [CHOOSE])
+        self.assertFalse(result.admitted)
+        self.assertIn("implementation not present", next(c.error for c in result.cases if not c.passed))
+        self.assertEqual(result.proven, [WRITE])
+
     def test_a_record_no_step_used_refuses(self):
         extra = {**_recorded(), "written[9]/offered": {"candidates": ["fine"]}}
         case = _case(WRITE, "extra", _sealed_write(), {"positions": POSITIONS, "forbidden": "x", "seed": 1},

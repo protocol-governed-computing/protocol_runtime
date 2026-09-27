@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from runtime.ct_executor import CTExecutor, CTExecutionError
+from runtime.ct_executor import CTArtifactNotFound, CTExecutor, CTExecutionError
 
 NONDETERMINISTIC_PURITY = "ct_impure"
 # Where a build's result is written, beside its compiled projections, so the assembler carries it into
@@ -246,6 +246,11 @@ def _run_case(executor: CTExecutor, case: dict[str, Any]) -> CaseResult:
         vars_result = executor.execute(ct_ir=ct_ir, inputs=ct_ir.get("inputs", {}),
                                        observer=records.append,
                                        recorded=recorded if supplied else None)
+    except CTArtifactNotFound as e:
+        # Nothing ran, so nothing was judged: the case fails whatever it expected, never passing a
+        # VIOLATION case by accident. A transform whose implementation is absent is refused and named,
+        # which is a result; escaping as a crash names nothing and stops the other cases.
+        return CaseResult(fqdn, False, f"implementation not present: {e}")
     except CTExecutionError as e:
         # A refusal the case expected passes — unless it was the runner refusing a missing record,
         # which is a defect in the case, not the transform's judgement.
