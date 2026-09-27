@@ -45,8 +45,9 @@ class DispatchTable:
     """
     Integer-keyed routing substrate from dispatch.json.
 
-    routing:  {wf_addr: {cc_addr: {condition_addr: {"addr": next_cc_addr, "key": node_key}}}}
-    terminal: {wf_addr: {cc_addr: {condition_addr: {"exit": node_key, "type": "EXIT"}}}}
+    routing:  {wf_addr: {node_key: {condition_addr: {"addr": next_addr, "key": next_node_key}}}}
+    terminal: {wf_addr: {node_key: {condition_addr: {"exit": node_key, "type": "EXIT"}}}}
+    emits:    {wf_addr: {node_key: {outcome: [EV_FQDN, ...]}}}
     pipeline: {cc_addr: [step, ...]}
     entry:    {wf_addr: {"start": cc_addr, "start_key": node_key, "rb": rb_addr, "in": in_addr}}
     bindings: {wf_addr: {node_key: {input_name: path_or_literal}}}
@@ -61,26 +62,24 @@ class DispatchTable:
             "step_id":   str,        # symbolic step name for $.results.<step_id>.<field> references
         }
 
-    Routing values carry both the next CC address and the target node_key so that
-    the scheduler can disambiguate distinct WF usages of the same shared CC
-    (e.g. four denial audit nodes that all bind to CC_RECORD_DENIED_ACTION_V0).
-
-    Bindings are keyed by node_key (not CC address) for the same reason.
+    Routing, endings, announcements and bindings are keyed by node_key, not CC address: one CC
+    may run at several nodes of a workflow (four denial audit nodes that all bind to
+    CC_RECORD_DENIED_ACTION_V0), each with its own continuation and inputs.
 
     All semantics are compiler-materialized. The dispatcher is a blind executor.
     The nested dicts are plain Python dicts (not frozen) — callers must not mutate.
     """
-    routing:  dict[int, dict[int, dict[int, Any]]]
+    routing:  dict[int, dict[str, dict[int, Any]]]
     # Declared endings. An outcome in neither `routing` nor `terminal` is one the declarations do
     # not answer for, and the traversal refuses rather than ending (`3a` EX-5, `3c` RT-9).
-    terminal: dict[int, dict[int, dict[int, Any]]]
+    terminal: dict[int, dict[str, dict[int, Any]]]
     # The input contract each IN gate admits against. An IN that declares none has nothing to
     # determine, and absence is not permission (AI-6).
     admission: dict[int, dict[str, Any]]
     pipeline: dict[int, list[dict]]
     entry:    dict[int, dict[str, Any]]        # entry may carry "actor" (FQDN) — Authority attribution
     bindings: dict[int, dict[str, dict[str, Any]]]
-    emits:    dict[int, dict[int, dict[str, str]]]  # {wf_addr: {cc_addr: {outcome: EV_FQDN}}} — Observation
+    emits:    dict[int, dict[str, dict[str, Any]]]  # {wf_addr: {node_key: {outcome: [EV_FQDN]}}} — Observation
 
 
 @dataclass(frozen=True)
@@ -252,27 +251,23 @@ def _verify_hash(actual: str, expected: str, domain: str) -> None:
 
 def _build_dispatch(raw: dict) -> DispatchTable:
     """
-    Parse dispatch.json into integer-keyed DispatchTable.
+    Parse dispatch.json into a DispatchTable.
 
-    JSON keys are strings (JSON spec). Addresses are int values.
-    Outer WF and CC keys are converted to int. Routing values are
-    {"addr": int, "key": str} dicts — preserved as-is. Bindings keys
-    are node_key strings — preserved as-is (not int-converted).
+    JSON keys are strings (JSON spec). Addresses are int values. WF, CC and condition keys are
+    converted to int; node keys — of routing, terminal, emits and bindings — stay strings.
     """
-    routing: dict[int, dict[int, dict[int, Any]]] = {}
-    for wf_key, cc_map in raw.get("routing", {}).items():
-        wf_addr = int(wf_key)
-        routing[wf_addr] = {
-            int(cc_key): {int(cond): tgt for cond, tgt in cond_map.items()}
-            for cc_key, cond_map in cc_map.items()
+    routing: dict[int, dict[str, dict[int, Any]]] = {}
+    for wf_key, node_map in raw.get("routing", {}).items():
+        routing[int(wf_key)] = {
+            node_key: {int(cond): tgt for cond, tgt in cond_map.items()}
+            for node_key, cond_map in node_map.items()
         }
 
-    terminal: dict[int, dict[int, dict[int, Any]]] = {}
-    for wf_key, cc_map in raw.get("terminal", {}).items():
-        wf_addr = int(wf_key)
-        terminal[wf_addr] = {
-            int(cc_key): {int(cond): tgt for cond, tgt in cond_map.items()}
-            for cc_key, cond_map in cc_map.items()
+    terminal: dict[int, dict[str, dict[int, Any]]] = {}
+    for wf_key, node_map in raw.get("terminal", {}).items():
+        terminal[int(wf_key)] = {
+            node_key: {int(cond): tgt for cond, tgt in cond_map.items()}
+            for node_key, cond_map in node_map.items()
         }
 
     admission: dict[int, dict[str, Any]] = {
@@ -299,12 +294,12 @@ def _build_dispatch(raw: dict) -> DispatchTable:
         # node_map keys are node_key strings (e.g. "CC_NORMALIZE_AGENT_REQUEST_V0")
         bindings[wf_addr] = {node_key: inp for node_key, inp in node_map.items()}
 
-    # emits: {wf_addr: {cc_addr: {outcome_str: EV_FQDN}}} — domain events to emit on a CC outcome
-    emits: dict[int, dict[int, dict[str, str]]] = {}
-    for wf_key, cc_map in raw.get("emits", {}).items():
+    # emits: {wf_addr: {node_key: {outcome_str: [EV_FQDN, ...]}}} — moments announced on an outcome
+    emits: dict[int, dict[str, dict[str, Any]]] = {}
+    for wf_key, node_map in raw.get("emits", {}).items():
         emits[int(wf_key)] = {
-            int(cc_key): {outcome: ev for outcome, ev in outcome_map.items()}
-            for cc_key, outcome_map in cc_map.items()
+            node_key: {outcome: ev for outcome, ev in outcome_map.items()}
+            for node_key, outcome_map in node_map.items()
         }
 
     return DispatchTable(

@@ -127,7 +127,7 @@ class TestSnapshotLoading(unittest.TestCase):
             # Overwrite dispatch with non-empty data
             tok_dir = workspace / "tokenized" / domain
             (tok_dir / "dispatch.json").write_text(json.dumps({
-                "routing": {"55": {"1": {"2": 3}}},
+                "routing": {"55": {"CC_START": {"2": {"addr": 3, "key": "CC_NEXT"}}}},
                 "pipeline": {"1": [{"addr": 10, "op": None, "step_id": "s1"}]},
                 "entry": {"5": {"start": 1, "rb": 2, "in": 3}},
                 "bindings": {"5": {"1": {"field": "$.inputs.x"}}},
@@ -136,10 +136,10 @@ class TestSnapshotLoading(unittest.TestCase):
             pkg = load_domain(workspace, domain)
 
             self.assertIn(55, pkg.dispatch.routing)
-            self.assertIn(1, pkg.dispatch.routing[55])
+            self.assertIn("CC_START", pkg.dispatch.routing[55])
             self.assertIn(1, pkg.dispatch.pipeline)
             self.assertIn(5, pkg.dispatch.entry)
-            self.assertEqual(pkg.dispatch.routing[55][1][2], 3)
+            self.assertEqual(pkg.dispatch.routing[55]["CC_START"][2], {"addr": 3, "key": "CC_NEXT"})
 
     def test_snapshot_files_not_mutated_on_load(self):
         """load_domain MUST NOT mutate snapshot files during loading."""

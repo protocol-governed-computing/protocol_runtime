@@ -15,8 +15,9 @@ The scheduler is a blind executor:
 Topology traversal rules:
     - Entry point is dispatch.entry[wf_addr]["start"]
     - Each CC produces a result_status; that status resolves to a condition address
-    - The condition address is looked up in dispatch.routing[wf_addr][cc_addr] → next node
-    - Traversal ends when no routing entry exists for the current (cc_addr, condition)
+    - The condition address is looked up in dispatch.routing[wf_addr][node_key] → next node;
+      keyed by node, because one CC may run at several nodes with different continuations
+    - Traversal ends at a declared ending (dispatch.terminal); an outcome with neither refuses
 
 Boundary nodes (IN_, EXIT_):
     Nodes without a pipeline entry (not in dispatch.pipeline) are boundary nodes.
@@ -160,7 +161,7 @@ def run_wf(
             # act completed, in the order the composition sealed. The order is normative — it is what
             # a reader of the account sees — so the sequence is announced as sealed and never
             # reordered here. A sequence of one is the ordinary case.
-            announced = pkg.dispatch.emits.get(wf_addr, {}).get(current_addr, {}).get(result_status)
+            announced = pkg.dispatch.emits.get(wf_addr, {}).get(current_node_key, {}).get(result_status)
             if announced:
                 # A single moment was sealed as a string before announcements could be plural. Read
                 # here rather than refused, so a snapshot built by an older compiler still runs.
@@ -196,26 +197,24 @@ def run_wf(
                            "ADMIT", {"outcome": result_status})
 
         # Resolve result_status → condition address and route to next node.
-        # Routing values are {"addr": int, "key": str} — addr is the next CC address,
-        # key is the next node_key for bindings disambiguation.
+        # Routing is looked up by the node just run, not the CC it ran. Values are
+        # {"addr": int, "key": str} — the next node's address, and its key for its own bindings,
+        # routing and announcements.
         previous_addr = current_addr
         condition_addr = _condition_addr(result_status, pkg)
-        routing = pkg.dispatch.routing.get(wf_addr, {}).get(current_addr, {})
+        routing = pkg.dispatch.routing.get(wf_addr, {}).get(current_node_key, {})
         next_entry = routing.get(condition_addr)
 
-        if isinstance(next_entry, dict):
-            current_addr = next_entry.get("addr")
-            current_node_key = next_entry.get("key", "")
-        elif next_entry is not None:
-            current_addr = next_entry  # bare int (legacy)
-            current_node_key = ""
+        if next_entry is not None:
+            current_addr = next_entry["addr"]
+            current_node_key = next_entry["key"]
         else:
             # No continuation. Two cases that were one, and reporting success for both is what
             # `3a` EX-5 and `3c` RT-9 forbid: an outcome the declarations do not answer for MUST
             # refuse, and ending the traversal instead made a dead end indistinguishable from a
             # declared ending. Termination is now declared (`dispatch.terminal`); its absence is
             # the dead end.
-            ending = pkg.dispatch.terminal.get(wf_addr, {}).get(current_addr, {}).get(condition_addr)
+            ending = pkg.dispatch.terminal.get(wf_addr, {}).get(current_node_key, {}).get(condition_addr)
             if ending is None:
                 writer.error(
                     "unrouted outcome",
