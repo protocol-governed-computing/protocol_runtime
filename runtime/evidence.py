@@ -61,6 +61,10 @@ def _content_classification(snapshot_root: Path) -> dict[str, list[str]]:
     )
 
 
+class ReplayRecordMissing(Exception):
+    """A replay reached a non-deterministic step whose outcome the replayed execution did not record."""
+
+
 class TraceWriter:
     """
     Append-only trace writer for a single workflow execution.
@@ -92,6 +96,9 @@ class TraceWriter:
         self._domain = domain
         self._wf_addr = wf_addr
         self._wf_fqdn = wf_fqdn
+        # Recorded outcomes of atoms declared not deterministic, keyed by (cc, step, path), when this
+        # execution is a replay. None for an ordinary execution.
+        self._replay: dict[tuple, Any] | None = None
 
         # The trace states which of its content is determinative, as its first record. Evidence that
         # carried the values and not the classification would be evidence a checker had to guess at,
@@ -144,6 +151,32 @@ class TraceWriter:
             step_op=op,
             detail={"step_fqdn": step_fqdn, "result_keys": list(result.keys())},
         )
+
+    def ct_step(self, cc_addr: int, step_addr: int, record: dict[str, Any]) -> None:
+        """One atom a transform ran, at any depth of a molecule.
+
+        The record names the atom's results, never their values — except for an atom declared not
+        deterministic, whose values are determining evidence: determinism holds relative to them,
+        and a replay reproduces the execution by substituting them.
+        """
+        self._emit("CT_STEP", cc_addr=cc_addr, step_addr=step_addr, detail=record)
+
+    def replay_from(self, outcomes: dict[tuple, Any]) -> None:
+        """Make this execution a replay of one whose non-deterministic outcomes were recorded."""
+        self._replay = dict(outcomes)
+
+    @property
+    def replaying(self) -> bool:
+        return self._replay is not None
+
+    def recorded_outcome(self, cc_addr: int, step_addr: int, path: str) -> Any:
+        key = (cc_addr, step_addr, path)
+        if self._replay is None or key not in self._replay:
+            # Running the atom instead would turn the replay into a new execution, so it is refused.
+            raise ReplayRecordMissing(
+                f"no recorded outcome for non-deterministic step {path!r} (cc {cc_addr}, step {step_addr})"
+            )
+        return self._replay[key]
 
     def cc_complete(
         self,

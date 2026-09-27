@@ -1,11 +1,16 @@
 import importlib
-from typing import Any
+from typing import Any, Callable
 
 from runtime.ct_errors import StructuredError
 
 # importlib carve-out: permitted here for compile-time-sealed handler_ref execution.
 # This is NOT discovery — the module path is embedded at compile time by materialize.py.
 # Discovery via importlib is forbidden; execution of a sealed handler_ref is not.
+
+
+# An atom declaring this purity gives a result not determined by its inputs; its result is recorded
+# when produced and substituted on replay (capability_transforms::CONSTITUTION_NONDETERMINISTIC_ATOMS_V0).
+NONDETERMINISTIC_PURITY = "ct_impure"
 
 
 class CTExecutionError(StructuredError):
@@ -46,6 +51,8 @@ class CTExecutor:
         *,
         ct_ir: dict[str, Any],
         inputs: dict[str, Any],
+        observer: "Callable[[dict[str, Any]], None] | None" = None,
+        recorded: "Callable[[str], Any] | None" = None,
     ) -> dict[str, Any]:
         """
         Execute a CT-IR program.
@@ -53,6 +60,14 @@ class CTExecutor:
         Assumptions:
         - ct_ir is already validated for host invariants
         - atom_stream is structurally valid
+
+        `observer`, when given, receives one record per atom run, at any depth of a molecule: its
+        path, its identity, its declared purity and the names of its results — and, for an atom
+        declared not deterministic, the result's values, which are determining evidence.
+
+        `recorded`, when given, is a replay: an atom declared not deterministic is never run, and
+        its recorded result for the same path is used instead. A path with no recorded result is
+        refused rather than run, because running it would make the replay a new execution.
         """
         ctx = _CTContext(inputs=inputs, input_types=ct_ir.get("input_types", {}))
 
@@ -60,31 +75,88 @@ class CTExecutor:
         if not steps:
             raise CTExecutionError("CT-IR missing atom_stream")
 
-        for idx, step in enumerate(steps):
-            atom = step.get("atom")
-            if not atom:
-                raise CTExecutionError(
-                    f"Missing atom at index {idx}"
-                )
-
-            # Check for loop construct
-            if "loop" in step:
-                self._execute_loop(ctx, step)
-            else:
-                # ---- IR format execution ----
-                # Pass complete step with all metadata + flattened args
-                # Step from IR has nested args, adapter expects flattened
-                invocation = {
-                    **step,  # Include all metadata (input_types, output_types, etc.)
-                    **step.get("args", {}),  # Flatten args to top level
-                    "as": step.get("out")  # Normalize output key
-                }
-
-                self._execute_handler_ref(ctx, invocation)
-
+        self._run_stream(ctx, steps, "", observer, recorded)
         return ctx._vars
 
-    def _execute_handler_ref(self, ctx: "_CTContext | _LoopContext", step: dict[str, Any]) -> None:
+    # ---------------------------------------------------------
+    # A sealed stream: atoms, molecules and loops, in declared order
+    # ---------------------------------------------------------
+
+    def _run_stream(self, ctx, steps, prefix, observer, recorded) -> None:
+        for idx, step in enumerate(steps):
+            if not step.get("atom"):
+                raise CTExecutionError(f"Missing atom at index {idx}")
+            symbol = step.get("out") or step.get("as") or f"#{idx}"
+            if "molecule" in step and "loop" in step:
+                self._run_loop_body(ctx, step, f"{prefix}{symbol}", observer, recorded)
+            elif "molecule" in step:
+                args = {k: (ctx.resolve(v) if isinstance(v, str) and v.startswith("$.") else v)
+                        for k, v in (step.get("args") or {}).items()}
+                result = self._run_molecule(step["molecule"], args, f"{prefix}{symbol}/", observer, recorded)
+                if step.get("out"):
+                    ctx.set_value(step["out"], result)
+            elif "loop" in step:
+                self._execute_loop(ctx, step)
+            else:
+                invocation = {
+                    **step,
+                    **step.get("args", {}),
+                    "as": step.get("out"),
+                }
+                self._execute_handler_ref(ctx, invocation, path=f"{prefix}{symbol}",
+                                          observer=observer, recorded=recorded)
+
+    def _run_molecule(self, body, inputs, prefix, observer, recorded) -> Any:
+        """Run a sealed molecule body with its own inputs; return the one value it emits."""
+        child = _CTContext(inputs=inputs)
+        self._run_stream(child, body.get("atom_stream") or [], prefix, observer, recorded)
+        outputs = body.get("outputs") or {}
+        if len(outputs) != 1:
+            raise CTExecutionError(f"A molecule emits exactly one value; this one declares {len(outputs)}")
+        (spec,) = outputs.values()
+        if not child.has_value(spec["from"]):
+            raise CTExecutionError(f"Molecule emission '{spec['from']}' was not produced")
+        return child.get_value(spec["from"])
+
+    def _run_loop_body(self, ctx, step, path, observer, recorded) -> None:
+        """Run a loop whose body is a molecule: once per member of the collection, every pass."""
+        spec = step["loop"]
+        collection = ctx.resolve(spec.get("over")) if spec.get("over") else []
+        if not isinstance(collection, (list, tuple)):
+            raise CTExecutionError(f"Loop 'over' must resolve to a list: {spec.get('over')}")
+        accumulator = self._initial_accumulator(ctx, spec.get("accumulator", {}))
+        last_result = None
+        for n, item in enumerate(collection):
+            loop_ctx = _LoopContext(ctx, accumulator, spec.get("iterator") or "item", item)
+            inputs = {k: (loop_ctx.resolve(v) if isinstance(v, str) and v.startswith("$.") else v)
+                      for k, v in (spec.get("inputs") or {}).items()}
+            last_result = self._run_molecule(step["molecule"], inputs, f"{path}[{n}]/", observer, recorded)
+            for acc_key, result_path in (spec.get("update_accumulator") or {}).items():
+                if isinstance(result_path, str) and result_path.startswith("$.results."):
+                    if isinstance(last_result, dict):
+                        accumulator[acc_key] = last_result.get(result_path[10:])
+        if step.get("out") and last_result is not None:
+            ctx.set_value(step["out"], last_result)
+
+    @staticmethod
+    def _initial_accumulator(ctx, accumulator_spec) -> dict[str, Any]:
+        accumulator = {}
+        for key, value in accumulator_spec.items():
+            if isinstance(value, str) and value.startswith("$.results."):
+                parts = value[10:].split(".", 1)
+                result = ctx.get_value(parts[0])
+                if len(parts) > 1 and isinstance(result, dict):
+                    for p in parts[1].split("."):
+                        result = result.get(p) if isinstance(result, dict) else None
+                accumulator[key] = result
+            elif isinstance(value, str) and value.startswith("$."):
+                accumulator[key] = ctx.resolve(value)
+            else:
+                accumulator[key] = value
+        return accumulator
+
+    def _execute_handler_ref(self, ctx: "_CTContext | _LoopContext", step: dict[str, Any],
+                             path: str = "", observer=None, recorded=None) -> None:
         """
         Execute an atom step by dispatching to its compile-time-sealed handler_ref.
 
@@ -94,6 +166,16 @@ class CTExecutor:
         handler_ref = step.get("handler_ref")
         if not handler_ref:
             raise CTExecutionError(f"CT-IR step missing handler_ref: {step.get('atom')}")
+        purity = step.get("purity")
+        out_key = step.get("as") or step.get("out")
+        if recorded is not None and purity == NONDETERMINISTIC_PURITY:
+            # Replay: the atom is not run. Its recorded result stands in for it, which is what makes
+            # the replay reproduce the determination rather than draw a new one.
+            result = recorded(path)
+            if out_key:
+                ctx.set_value(out_key, result)
+            self._observe(observer, path, step, purity, result, replayed=True)
+            return
         module_path = handler_ref.get("module")
         callable_name = handler_ref.get("callable")
         if not module_path or not callable_name:
@@ -136,7 +218,8 @@ class CTExecutor:
 
         # Adapter logic (migrated from atom_registry._register_execute_atom):
         # Resolve $.path references; skip reserved and metadata keys.
-        RESERVED_KEYS = {"atom", "molecule", "kind", "as", "out", "loop", "args", "handler_ref", "input_types"}
+        RESERVED_KEYS = {"atom", "molecule", "kind", "as", "out", "loop", "args", "handler_ref",
+                         "input_types", "purity"}
         resolved_inputs: dict[str, Any] = {}
         for key, value in step.items():
             if key in RESERVED_KEYS:
@@ -156,9 +239,25 @@ class CTExecutor:
             ) from exc
         if result is None:
             raise CTExecutionError(f"Atom returned None: {step.get('atom')}")
-        out_key = step.get("as") or step.get("out")
         if out_key:
             ctx.set_value(out_key, result)
+        self._observe(observer, path, step, purity, result, replayed=False)
+
+    @staticmethod
+    def _observe(observer, path, step, purity, result, replayed) -> None:
+        """One evidence record per atom run: result names always, values only where they determine."""
+        if observer is None:
+            return
+        record = {
+            "path": path,
+            "step_fqdn": step.get("atom"),
+            "purity": purity,
+            "result_keys": sorted(result.keys()) if isinstance(result, dict) else [],
+        }
+        if purity == NONDETERMINISTIC_PURITY:
+            record["outcome"] = result
+            record["replayed"] = replayed
+        observer(record)
 
     def _execute_loop(
         self,

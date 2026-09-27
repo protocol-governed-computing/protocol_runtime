@@ -23,7 +23,7 @@ def _get_executor() -> CTExecutor:
     return _executor
 
 
-def execute_ct(ct_ir: dict[str, Any], inputs: dict[str, Any]) -> Any:
+def execute_ct(ct_ir: dict[str, Any], inputs: dict[str, Any], observer=None, recorded=None) -> Any:
     """
     Execute CT-IR and adapt result to CC expectation.
 
@@ -41,6 +41,8 @@ def execute_ct(ct_ir: dict[str, Any], inputs: dict[str, Any]) -> Any:
     symbol_table = _get_executor().execute(
         ct_ir=ct_ir,
         inputs=inputs,
+        observer=observer,
+        recorded=recorded,
     )
 
     # ---- Output adaptation ----

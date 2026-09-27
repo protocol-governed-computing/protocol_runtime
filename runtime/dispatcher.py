@@ -144,7 +144,7 @@ def execute_cc(
         # --- Execute step ---
         if op is None:
             # CT step — pure computation, zero side effects
-            result_status, raw_result = _execute_ct_step(step_addr, resolved_inputs, pkg)
+            result_status, raw_result = _execute_ct_step(step_addr, resolved_inputs, pkg, writer, cc_addr)
         else:
             # CS step — controlled side effect via declared handler
             try:
@@ -204,6 +204,8 @@ def _execute_ct_step(
     ct_addr: int,
     resolved_inputs: dict[str, Any],
     pkg: RuntimePackage,
+    writer: TraceWriter | None = None,
+    cc_addr: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Execute a CT (pure transform) step.
@@ -219,7 +221,12 @@ def _execute_ct_step(
     ct_ir = ct_entry.get("ct_ir", {})
 
     try:
-        raw_result = execute_ct(ct_ir, resolved_inputs)
+        # Every atom the transform runs, at any depth of a molecule, leaves its own record; a replay
+        # substitutes the recorded result of each atom declared not deterministic.
+        observer = (lambda record: writer.ct_step(cc_addr, ct_addr, record)) if writer else None
+        recorded = ((lambda path: writer.recorded_outcome(cc_addr, ct_addr, path))
+                    if writer is not None and writer.replaying else None)
+        raw_result = execute_ct(ct_ir, resolved_inputs, observer=observer, recorded=recorded)
         return "SUCCESS", (raw_result if isinstance(raw_result, dict) else {})
     except StructuredError as exc:
         # CT refusal → protocol VIOLATION, carrying what was refused. Returning a bare {} here

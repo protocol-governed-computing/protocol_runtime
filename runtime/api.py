@@ -33,6 +33,7 @@ def run_workflow(
     payload: dict[str, Any],
     data_root: str | Path,
     snapshot_root: str | Path | None = None,
+    replay_trace: str | Path | None = None,
 ) -> RunResult:
     """Warm-boot the assembled snapshot and execute a workflow; return `(status, surface, trace)`.
 
@@ -61,6 +62,11 @@ def run_workflow(
     writer = TraceWriter(trace_dir=trace_dir, trace_id=trace_id, domain=domain,
                          wf_addr=wf_addr, wf_fqdn=wf_fqdn, snapshot_root=booted.snapshot_root,
                          snapshot_id=booted.snapshot_id)
+    if replay_trace is not None:
+        # A replay substitutes each recorded outcome of an atom declared not deterministic, so it
+        # reproduces the original determination rather than drawing a new one.
+        from runtime.replay import recorded_outcomes
+        writer.replay_from(recorded_outcomes(Path(replay_trace)))
     try:
         status, surface = run_wf(wf_fqdn=wf_fqdn, payload=payload, pkg=pkg,
                                  writer=writer, data_root=str(data_root))

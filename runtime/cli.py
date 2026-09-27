@@ -79,6 +79,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Render execution-path PNG after run (requires graphviz)",
     )
 
+    # ── replay ────────────────────────────────────────────────────
+    rp_p = subs.add_parser(
+        "replay",
+        help="Re-execute a workflow from its recorded outcomes and compare it with the original",
+    )
+    rp_p.add_argument("--wf", required=True, metavar="FQDN", help="Workflow FQDN the trace executed")
+    rp_p.add_argument("--payload", metavar="FILE", help="The original payload (omit for empty)")
+    rp_p.add_argument("--trace", required=True, metavar="FILE", help="The original execution's trace (.jsonl)")
+    rp_p.add_argument("--data-root", dest="data_root", required=True, metavar="PATH",
+                      help="A fresh instance root holding the original's initial state; never the original's")
+    rp_p.add_argument("--snapshot", dest="snapshot", metavar="PATH",
+                      help="The assembled snapshot the original ran against")
+
     # ── boot ──────────────────────────────────────────────────────
     boot_p = subs.add_parser(
         "boot",
@@ -416,12 +429,31 @@ def _fatal(message: str) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _handle_replay(args) -> None:
+    """Replay an execution and report whether it reproduced the original determination."""
+    from runtime.replay import compare
+    original = Path(args.trace)
+    data_root = Path(args.data_root)
+    if not data_root.is_absolute():
+        _fatal(f"--data-root must be an absolute path, got: {args.data_root}")
+    if original.resolve().is_relative_to(data_root.resolve()):
+        _fatal("--data-root holds the original trace; a replay needs a fresh instance root")
+    snapshot_root = Path(args.snapshot) if args.snapshot else default_snapshot_root()
+    run = run_workflow(wf_fqdn=args.wf, payload=_load_payload(args.payload), data_root=str(data_root),
+                       snapshot_root=snapshot_root, replay_trace=original)
+    same, detail = compare(original, run.trace_dir / f"{run.trace_id}.jsonl")
+    print(f"[runtime] Replay {'REPRODUCED' if same else 'DIVERGED'}: {detail}")
+    sys.exit(0 if same else 1)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
     if args.command == "run":
         _handle_run(args)
+    elif args.command == "replay":
+        _handle_replay(args)
     elif args.command == "boot":
         _handle_boot(args)
     elif args.command == "coordinator":
