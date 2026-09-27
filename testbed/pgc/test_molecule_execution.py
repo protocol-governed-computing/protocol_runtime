@@ -58,8 +58,13 @@ def _finish_at_three(inputs):
     return {"text": text, "done": inputs["position"] >= 3, "blocked": []}
 
 
+def _echo(inputs):
+    return {"received": dict(inputs)}
+
+
 probe = types.ModuleType("probe_molecule_atoms")
 probe.offer, probe.choose, probe.finish_at_three = _offer, _choose, _finish_at_three
+probe.echo = _echo
 sys.modules["probe_molecule_atoms"] = probe
 
 
@@ -188,6 +193,12 @@ class TraceReplayTest(unittest.TestCase):
             others = [json.loads(l)["detail"].get("outcome") for l in second.read_text().splitlines()[1:]]
             if outcomes != others:
                 self.assertFalse(compare(first, second)[0])
+
+    def test_an_atom_is_handed_every_argument_even_one_named_like_a_step_key(self):
+        names = {"kind": "internal", "as": "a", "out": "o", "loop": "l", "purity": "p", "molecule": "m"}
+        step = _atom("CT_PURE_ECHO_V0", "echo", "ct_pure", {n: f"$.inputs.{n}" for n in names}, "echoed")
+        result = CTExecutor().execute(ct_ir={"atom_stream": [step]}, inputs=names)
+        self.assertEqual(result["echoed"]["received"], names)
 
 
 if __name__ == "__main__":

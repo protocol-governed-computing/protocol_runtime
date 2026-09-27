@@ -220,10 +220,14 @@ class CTExecutor:
         # Resolve $.path references; skip reserved and metadata keys.
         RESERVED_KEYS = {"atom", "molecule", "kind", "as", "out", "loop", "args", "handler_ref",
                          "input_types", "purity"}
+        # A step that declares its arguments is handed exactly those. Reading them back out of the
+        # flattened step dropped any argument whose name is also a step key: a transform taking
+        # `kind` was handed nothing for it, because `kind` is how a step says what it is.
+        declared = step.get("args")
+        source = declared.items() if isinstance(declared, dict) else (
+            (key, value) for key, value in step.items() if key not in RESERVED_KEYS)
         resolved_inputs: dict[str, Any] = {}
-        for key, value in step.items():
-            if key in RESERVED_KEYS:
-                continue
+        for key, value in source:
             if isinstance(value, str) and value.startswith("$."):
                 resolved_inputs[key] = ctx.resolve(value)
             else:
