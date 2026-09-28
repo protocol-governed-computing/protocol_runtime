@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,8 +76,26 @@ def run_workflow(
         raise
     finally:
         writer.close()
+        _render_path(booted.snapshot_root, trace_dir, trace_id)
 
     return RunResult(status=status, surface=surface or {}, trace_id=trace_id, trace_dir=trace_dir)
+
+
+def _render_path(snapshot_root: Path, trace_dir: Path, trace_id: str) -> None:
+    """Write the run's path over its workflow's graph, `<trace_id>.png`, next to the trace.
+
+    A projection of the trace, never part of it: the JSONL is the evidence, and nothing reads the
+    picture back. So it cannot fail a run — no graphviz, or a workflow the snapshot publishes no graph
+    for, means no picture and nothing else. `PGC_TRACE_PNG=0` turns it off, for runs where rendering
+    costs more than it shows (deployment configuration, rulings.md C2/C3).
+    """
+    if os.environ.get("PGC_TRACE_PNG", "1") == "0" or shutil.which("dot") is None:
+        return
+    from runtime.trace_viz import render_trace_png
+    try:
+        render_trace_png(Path(snapshot_root), trace_dir / f"{trace_id}.jsonl")
+    except (FileNotFoundError, ValueError, KeyError):
+        pass
 
 
 @functools.lru_cache(maxsize=8)

@@ -43,7 +43,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 def render_trace_png(
-    workspace: Path,
+    snapshot_root: Path,
     trace_path: Path,
 ) -> Optional[Path]:
     """
@@ -53,7 +53,7 @@ def render_trace_png(
     execution path, then overlays it (red) on the compiled workflow graph.
 
     Args:
-        workspace:   Absolute path to pgs_workspace root.
+        snapshot_root: The assembled snapshot the trace was executed against.
         trace_path:  Path to the completed .jsonl trace file.
 
     Returns:
@@ -85,17 +85,13 @@ def render_trace_png(
     wf_code = wf_fqdn.split("::")[-1]  # e.g. "WF_REGISTER_ACTOR_UNVERIFIED_V0"
 
     # Load compiled graph from protocol_snapshot/behavior_logic/
-    graph_path = (
-        workspace
-        / "protocol_snapshot"
-        / "behavior_logic"
-        / wf_code
-        / f"{wf_code}.graph.json"
-    )
+    # The assembled snapshot publishes each workflow's graph under its domain.
+    domain = wf_fqdn.split("::")[0]
+    graph_path = snapshot_root / "behavior_logic" / domain / wf_code / f"{wf_code}.graph.json"
     if not graph_path.exists():
         raise FileNotFoundError(
             f"Compiled graph not found: {graph_path}\n"
-            f"Re-run the compiler to regenerate behavior_logic artifacts."
+            f"Is this the snapshot the trace was executed against?"
         )
 
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
@@ -141,61 +137,36 @@ def _extract_execution_path(
     graph: dict,
 ) -> list[tuple[str, str, str]]:
     """
-    Reconstruct [(from_node, condition, to_node), ...] from trace events.
+    Reconstruct [(from_node, condition, to_node), ...] from the trace's routing decisions.
 
-    Uses CC_COMPLETE events (in emission order) and graph edges to walk
-    the actual execution path. IN_ boundary nodes always yield ACK in
-    the current runtime (admission_snapshot not yet integrated).
+    Every routing determination is a `WF_ROUTE` event carrying the outcome routed on, in order. The
+    graph's edges are keyed by node, so walking them from the entry — one recorded outcome at a
+    time — reaches exactly the nodes the run did.
+
+    This replaced a walk over `CC_COMPLETE` events matched to nodes by contract code. That walk lost
+    the path at the first node whose key is not its contract's code, and could not tell apart two
+    places running one contract. The trace names contracts, not places; the routing names places.
 
     Args:
         events: Parsed JSONL trace events.
         graph:  Compiled graph dict (from graph.json).
 
     Returns:
-        Ordered list of (from_node_id, condition, to_node_id) tuples.
+        Ordered list of (from_node_id, condition, to_node_id) tuples. A run that ended on an outcome
+        the graph does not route stops at the last node it reached.
     """
-    entry_node: str = graph["entry"]  # e.g. "IN_ACTOR_REGISTERED_V0"
-
-    # (from_node, condition) → to_node
-    edge_map: dict[tuple[str, str], str] = {
-        (e["from"], e["condition"]): e["to"]
-        for e in graph["edges"]
-    }
-
-    # Filter to top-level workflow CC events only.
-    # Sub-workflows emit CC_COMPLETE events with the same wf_addr as the
-    # top-level workflow (the runtime reuses the same address), so wf_addr
-    # filtering is insufficient. Instead, restrict to CCs that are declared
-    # nodes in the top-level graph — sub-workflow CCs won't appear there.
-    graph_cc_nodes: set[str] = {
-        n["id"] for n in graph["nodes"] if n["type"] == "CC"
-    }
-    cc_completions = [
-        e for e in events
-        if e["event_type"] == "CC_COMPLETE"
-        and e["detail"]["cc_fqdn"].split("::")[-1] in graph_cc_nodes
-    ]
-
-    if not cc_completions:
-        # No CC nodes executed — IN_ gated as NACK and routed to EXIT
-        to_node = edge_map.get((entry_node, "NACK"), "EXIT")
-        return [(entry_node, "NACK", to_node)]
-
+    edge_map: dict[tuple[str, str], str] = {(e["from"], e["condition"]): e["to"] for e in graph["edges"]}
     path: list[tuple[str, str, str]] = []
-
-    # IN_ → first CC: always ACK (admission passes through in current runtime)
-    first_cc_code = cc_completions[0]["detail"]["cc_fqdn"].split("::")[-1]
-    path.append((entry_node, "ACK", first_cc_code))
-
-    # CC → CC (or EXIT) — follow result_status routing
-    for cc_event in cc_completions:
-        cc_code = cc_event["detail"]["cc_fqdn"].split("::")[-1]
-        result_status = cc_event["result_status"]
-        to_node = edge_map.get((cc_code, result_status))
+    node = graph["entry"]
+    for event in events:
+        if event.get("event_type") != "WF_ROUTE":
+            continue
+        condition = event.get("result_status")
+        to_node = edge_map.get((node, condition))
         if to_node is None:
-            break  # no further routing — terminal
-        path.append((cc_code, result_status, to_node))
-
+            break
+        path.append((node, condition, to_node))
+        node = to_node
     return path
 
 

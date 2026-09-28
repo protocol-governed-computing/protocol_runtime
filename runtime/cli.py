@@ -147,9 +147,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a completed .jsonl trace file",
     )
     bl_p.add_argument(
-        "--workspace",
+        "--snapshot",
         metavar="PATH",
-        help="Absolute path to pgs_workspace root (or set PGS_WORKSPACE)",
+        help="Absolute path to the assembled snapshot the trace ran against "
+             "(or set PGC_SNAPSHOT_ROOT; default: the sibling ../snapshot)",
     )
 
     return parser
@@ -345,14 +346,12 @@ def _handle_behavior_logic(args: argparse.Namespace) -> None:
     if not trace_path.exists():
         _fatal(f"Trace file not found: {args.trace_file}")
 
-    workspace_str = args.workspace or os.environ.get("PGS_WORKSPACE")
-    if not workspace_str:
-        _fatal("--workspace PATH or PGS_WORKSPACE is required")
-    workspace = Path(workspace_str)
-    if not workspace.is_absolute():
-        _fatal(f"--workspace must be an absolute path, got: {workspace_str}")
+    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
+    snapshot_root = Path(snapshot_str) if snapshot_str else default_snapshot_root()
+    if not snapshot_root.is_absolute():
+        _fatal(f"--snapshot must be an absolute path, got: {snapshot_str}")
 
-    png_path = _render_behavior_logic(workspace, trace_path)
+    png_path = _render_behavior_logic(snapshot_root, trace_path)
     if png_path:
         print(f"[runtime] Execution path PNG: {png_path}")
     else:
@@ -392,11 +391,11 @@ def _handle_examine(args: argparse.Namespace) -> None:
 # Utilities
 # ---------------------------------------------------------------------------
 
-def _render_behavior_logic(workspace: Path, trace_path: Path) -> "Path | None":
+def _render_behavior_logic(snapshot_root: Path, trace_path: Path) -> "Path | None":
     """Invoke evidence projection to render execution-path PNG. Best-effort."""
     from runtime.trace_viz import render_trace_png
     try:
-        return render_trace_png(workspace, trace_path)
+        return render_trace_png(snapshot_root, trace_path)
     except (FileNotFoundError, ValueError) as exc:
         print(f"[runtime] Behavior logic render error: {exc}", file=sys.stderr)
         return None
