@@ -84,6 +84,45 @@ class WarmBootTest(unittest.TestCase):
             boot(tmp)
         shutil.rmtree(tmp.parent)
 
+    def test_a_profile_changed_after_sealing_is_refused(self):
+        # The identity covers the claimed profile's content. A copy of the profiles in which the
+        # claimed one declares something more is the profile changed since sealing → refused.
+        import os
+        import re
+        from assembler.core import _profile_root
+        profile = json.loads((SNAPSHOT_ROOT / "manifest.json").read_text())["profile"]
+        tmp = Path(tempfile.mkdtemp())
+        shutil.copytree(_profile_root(), tmp / "profiles")
+        changed = False
+        for path in (tmp / "profiles").glob("*.md"):
+            text = path.read_text()
+            m = re.search(rf"^(\s*)identity: {re.escape(profile)}\s*$", text, re.M)
+            if m:
+                path.write_text(text[:m.end()] + f"\n{m.group(1)}amended_after_sealing: true" + text[m.end():])
+                changed = True
+        self.assertTrue(changed, f"no profile file declares {profile}")
+        previous = os.environ.get("PGC_SNAPSHOT_PROFILES")
+        os.environ["PGC_SNAPSHOT_PROFILES"] = str(tmp / "profiles")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "profile failure"):
+                boot(SNAPSHOT_ROOT)
+        finally:
+            if previous is None:
+                os.environ.pop("PGC_SNAPSHOT_PROFILES")
+            else:
+                os.environ["PGC_SNAPSHOT_PROFILES"] = previous
+            shutil.rmtree(tmp)
+
+    def test_a_manifest_not_covering_its_profile_is_refused(self):
+        tmp = Path(tempfile.mkdtemp()) / "snap"
+        shutil.copytree(SNAPSHOT_ROOT, tmp)
+        man = json.loads((tmp / "manifest.json").read_text())
+        del man["profile_sha256"]
+        (tmp / "manifest.json").write_text(json.dumps(man))
+        with self.assertRaisesRegex(RuntimeError, "profile_sha256"):
+            boot(tmp)
+        shutil.rmtree(tmp.parent)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,110 +1,57 @@
 """
-reporter.py — Diagnostic report formatting.
+reporter.py — what a completed run did, read from its trace.
 
-Governed by: Trace Examiner spec §8
-
-Formats DiagnosticReport to terminal output.
-Deterministic, stable format. Pure function.
+A run either **completed** — it reached a declared ending, whatever the outcome, refusals included —
+or it **failed structurally**: the runtime could not carry out what the snapshot declares (an
+outcome with no routing and no ending, an admission gate with no contract, an exception). The first
+is the business answering; the second is a defect in the composition or the runtime, and exits 1.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from runtime.examine.classifier import FailureClass
-
-
-_SE_SUCCESS_STATUSES = frozenset({"SUCCESS", "ACK", "completed"})
-
-
-@dataclass
-class SideEffectOutcome:
-    """Outcome of a side-effect capability node."""
-
-    cc_code: str
-    result_status: str
-
-    @property
-    def succeeded(self) -> bool:
-        return self.result_status in _SE_SUCCESS_STATUSES
+from dataclasses import dataclass, field
 
 
 @dataclass
 class DiagnosticReport:
-    """
-    Complete diagnostic report for a trace examination.
+    trace_id: str
+    workflow: str
+    snapshot_id: str
+    outcome: str | None             # WF_COMPLETE's result, or None when the run never completed
+    ending: str | None              # the declared ending reached, when there is one
+    path: list[tuple[str, str, str | None]] = field(default_factory=list)   # (from, outcome, to)
+    contracts: list[tuple[str, str, str | None]] = field(default_factory=list)  # (node, contract, result)
+    events: list[str] = field(default_factory=list)
+    recorded: list[str] = field(default_factory=list)   # non-deterministic results recorded
+    errors: list[str] = field(default_factory=list)
 
-    Per spec §6 data structure.
-    """
-
-    execution_id: str
-    workflow_code: str
-    has_structural_failure: bool
-    failure_class: FailureClass | None
-    failing_node: str | None
-    reason: str
-    artifact_path: str | None
-    fix_hint: str
-    side_effect_outcomes: list[SideEffectOutcome]
+    @property
+    def has_structural_failure(self) -> bool:
+        return bool(self.errors) or self.outcome is None
 
     def format(self) -> str:
-        """Format report for terminal output per spec §8."""
-        if not self.has_structural_failure:
-            return self._format_success()
-        return self._format_failure()
-
-    def _format_failure(self) -> str:
         sep = "=" * 60
-        lines = [
-            sep,
-            "[trace-examiner] STRUCTURAL FAILURE DETECTED",
-            sep,
-            f"Trace ID:      {self.execution_id}",
-            f"Workflow:       {self.workflow_code}",
-            f"Failing Node:   {self.failing_node or '(workflow-level)'}",
-            f"Failure Class:  {self.failure_class.value if self.failure_class else 'UNKNOWN'}",
-            f"Reason:         {self.reason}",
-            f"Artifact:       {self.artifact_path or '(unresolved)'}",
-            f"Fix:            {self.fix_hint}",
-            sep,
-        ]
-        return "\n".join(lines)
-
-    def _format_success(self) -> str:
-        parts: list[str] = []
-
-        if self.failure_class == FailureClass.BUSINESS_VIOLATION:
-            sep = "-" * 60
-            parts.extend([
-                sep,
-                "[trace-examiner] BUSINESS VIOLATION (not escalated)",
-                sep,
-                f"Trace ID:      {self.execution_id}",
-                f"Workflow:       {self.workflow_code}",
-                f"Node:           {self.failing_node or '(unknown)'}",
-                f"Reason:         {self.reason}",
-                sep,
-            ])
-        else:
-            parts.append(
-                f"[trace-examiner] {self.workflow_code} — "
-                f"{self.execution_id} — no structural failures"
-            )
-
-        if self.side_effect_outcomes:
-            parts.append(self._format_side_effect_outcomes())
-
-        return "\n".join(parts)
-
-    def _format_side_effect_outcomes(self) -> str:
-        """Format side-effect outcomes as a business outcome summary."""
-        lines: list[str] = []
-        sep = "-" * 60
-        lines.append(sep)
-        lines.append("[trace-examiner] SIDE-EFFECT OUTCOMES")
-        lines.append(sep)
-        for outcome in self.side_effect_outcomes:
-            indicator = "OK" if outcome.succeeded else "FAILED"
-            lines.append(f"  [{indicator}] {outcome.cc_code}: {outcome.result_status}")
+        head = "STRUCTURAL FAILURE" if self.has_structural_failure else "COMPLETED"
+        lines = [sep, f"[trace-examiner] {head}", sep,
+                 f"Trace:      {self.trace_id}",
+                 f"Workflow:   {self.workflow}",
+                 f"Snapshot:   {self.snapshot_id}",
+                 f"Outcome:    {self.outcome or '(never completed)'}",
+                 f"Ending:     {self.ending or '(none reached)'}"]
+        if self.path:
+            lines.append("Path:")
+            lines += [f"  {f} --{o}--> {t or '(nowhere)'}" for f, o, t in self.path]
+        if self.contracts:
+            lines.append("Contracts:")
+            lines += [f"  {n or '?'}  {c}  {r or '(no result)'}" for n, c, r in self.contracts]
+        if self.events:
+            lines.append("Events:")
+            lines += [f"  {e}" for e in self.events]
+        if self.recorded:
+            lines.append("Recorded non-deterministic results:")
+            lines += [f"  {r}" for r in self.recorded]
+        if self.errors:
+            lines.append("Errors:")
+            lines += [f"  {e}" for e in self.errors]
         lines.append(sep)
         return "\n".join(lines)
