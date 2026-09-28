@@ -153,7 +153,8 @@ def run_wf(
             cc_inputs = ctx.resolve_inputs(wf_bindings)
 
             result_status, surface = execute_cc(
-                current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr
+                current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr,
+                node_key=current_node_key,
             )
             ctx.record_result(current_addr, surface)
 
@@ -201,6 +202,7 @@ def run_wf(
         # {"addr": int, "key": str} — the next node's address, and its key for its own bindings,
         # routing and announcements.
         previous_addr = current_addr
+        previous_node_key = current_node_key
         condition_addr = _condition_addr(result_status, pkg)
         routing = pkg.dispatch.routing.get(wf_addr, {}).get(current_node_key, {})
         next_entry = routing.get(condition_addr)
@@ -220,7 +222,8 @@ def run_wf(
                     "unrouted outcome",
                     node=current_addr, outcome=result_status, condition_addr=condition_addr,
                 )
-                writer.route(from_addr=current_addr, condition=result_status, to_addr=None)
+                writer.route(from_addr=current_addr, condition=result_status, to_addr=None,
+                             from_node=current_node_key, to_node=None)
                 writer.wf_complete("VIOLATION")
                 raise UnroutedOutcomeError(
                     f"outcome {result_status!r} from node {current_addr} has neither declared "
@@ -232,7 +235,9 @@ def run_wf(
             declared_ending = ending.get("exit", "")
 
         # Evidence the routing determination, not only its effect (`3e` §3.1 point 4).
-        writer.route(from_addr=previous_addr, condition=result_status, to_addr=current_addr)
+        writer.route(from_addr=previous_addr, condition=result_status, to_addr=current_addr,
+                     from_node=previous_node_key,
+                     to_node=current_node_key if current_addr is not None else declared_ending)
 
     writer.wf_complete(result_status)
     return result_status, surface

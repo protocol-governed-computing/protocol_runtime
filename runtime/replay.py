@@ -17,11 +17,18 @@ from typing import Any
 
 NONDETERMINISTIC_PURITY = "ct_impure"
 
-# Content that varies between two faithful executions without any governed consequence varying:
-# when it happened, and which execution it was. Whether a step was replayed is how the replay
-# differs from the original by construction, not a difference in what was determined.
-_OBSERVATIONAL = {"trace_id", "ts_ns"}
+# Whether a step was replayed is how the replay differs from the original by construction, not a
+# difference in what was determined. Everything else observational is declared by the classification
+# the trace carries in its first record, and read from there — never from a list kept here.
 _REPLAY_MARKER = "replayed"
+
+
+def _without_keys(value: Any, keys: frozenset[str]) -> Any:
+    if isinstance(value, dict):
+        return {k: _without_keys(v, keys) for k, v in value.items() if k not in keys}
+    if isinstance(value, list):
+        return [_without_keys(v, keys) for v in value]
+    return value
 
 
 def _events(trace_path: Path) -> list[dict[str, Any]]:
@@ -39,10 +46,20 @@ def recorded_outcomes(trace_path: Path) -> dict[tuple, Any]:
 
 
 def determinative(trace_path: Path) -> list[dict[str, Any]]:
-    """The trace with its observational content removed — what two faithful executions share."""
-    kept = []
-    for e in _events(trace_path):
-        e = {k: v for k, v in e.items() if k not in _OBSERVATIONAL}
+    """The trace with its observational content removed — what two faithful executions share.
+
+    The classification is the trace's own first record: its observational fields are removed, and
+    its observational keys are removed wherever they appear inside what remains.
+    """
+    events = _events(trace_path)
+    header = events[0] if events else {}
+    if header.get("event_type") != "trace_classification":
+        raise ValueError(f"{trace_path} does not begin with its classification — nothing says what to compare")
+    fields = set(header["observational"])
+    keys = frozenset(header["observational_keys"])
+    kept = [header]
+    for e in events[1:]:
+        e = _without_keys({k: v for k, v in e.items() if k not in fields}, keys)
         if e.get("event_type") == "CT_STEP":
             e["detail"] = {k: v for k, v in (e.get("detail") or {}).items() if k != _REPLAY_MARKER}
         kept.append(e)

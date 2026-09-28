@@ -97,6 +97,7 @@ def execute_cc(
     writer:    TraceWriter,
     data_root: str,
     wf_addr:   int = -1,
+    node_key:  str = "",
 ) -> tuple[str, dict[str, Any]]:
     """
     Execute a CC pipeline and return (result_status, surface).
@@ -115,7 +116,7 @@ def execute_cc(
             surface       — dict of CC-level named outputs for downstream binding
     """
     cc_fqdn = pkg.vocab.fqdn(cc_addr)
-    writer.cc_start(cc_addr, cc_fqdn, cc_inputs)
+    writer.cc_start(cc_addr, cc_fqdn, cc_inputs, node=node_key)
 
     steps = pkg.dispatch.pipeline.get(cc_addr, [])
     step_results: dict[str, dict[str, Any]] = {}  # step_id → surface fragment
@@ -192,7 +193,7 @@ def execute_cc(
         if key not in surface and key not in _INTERNAL_KEYS:
             surface[key] = value
 
-    writer.cc_complete(cc_addr, cc_fqdn, result_status, surface)
+    writer.cc_complete(cc_addr, cc_fqdn, result_status, surface, node=node_key)
     return result_status, surface
 
 

@@ -137,36 +137,28 @@ def _extract_execution_path(
     graph: dict,
 ) -> list[tuple[str, str, str]]:
     """
-    Reconstruct [(from_node, condition, to_node), ...] from the trace's routing decisions.
+    The run's path, [(from_node, condition, to_node), ...], as the trace records it.
 
-    Every routing determination is a `WF_ROUTE` event carrying the outcome routed on, in order. The
-    graph's edges are keyed by node, so walking them from the entry — one recorded outcome at a
-    time — reaches exactly the nodes the run did.
-
-    This replaced a walk over `CC_COMPLETE` events matched to nodes by contract code. That walk lost
-    the path at the first node whose key is not its contract's code, and could not tell apart two
-    places running one contract. The trace names contracts, not places; the routing names places.
+    Every routing determination is a `WF_ROUTE` event naming the node it left, the outcome, and the
+    node or declared ending it reached. The path is read from those, not inferred: an earlier walk
+    matched `CC_COMPLETE` events to nodes by contract code, and lost the path at the first place
+    whose key is not its contract's code. A route that reached neither routing nor an ending has no
+    `to_node`, and the path stops at the node that produced it.
 
     Args:
         events: Parsed JSONL trace events.
-        graph:  Compiled graph dict (from graph.json).
-
-    Returns:
-        Ordered list of (from_node_id, condition, to_node_id) tuples. A run that ended on an outcome
-        the graph does not route stops at the last node it reached.
+        graph:  Compiled graph dict (from graph.json) — unused for the path, kept for the signature.
     """
-    edge_map: dict[tuple[str, str], str] = {(e["from"], e["condition"]): e["to"] for e in graph["edges"]}
     path: list[tuple[str, str, str]] = []
-    node = graph["entry"]
     for event in events:
         if event.get("event_type") != "WF_ROUTE":
             continue
-        condition = event.get("result_status")
-        to_node = edge_map.get((node, condition))
-        if to_node is None:
+        detail = event.get("detail") or {}
+        if "from_node" not in detail:
+            raise ValueError("WF_ROUTE carries no node keys — the trace predates them; re-run it")
+        if detail.get("to_node") is None:
             break
-        path.append((node, condition, to_node))
-        node = to_node
+        path.append((detail["from_node"], event.get("result_status"), detail["to_node"]))
     return path
 
 

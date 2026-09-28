@@ -73,7 +73,7 @@ class NodeKeyedRouting(unittest.TestCase):
         pkg = SimpleNamespace(dispatch=dispatch(), vocab=Vocab())
         outcomes, reasons = iter(confirmations), []
 
-        def execute_cc(cc_addr, rb_addr, inputs, pkg, writer, data_root, wf_addr):
+        def execute_cc(cc_addr, rb_addr, inputs, pkg, writer, data_root, wf_addr, node_key=""):
             if cc_addr == CONFIRM:
                 return next(outcomes), {}
             reasons.append(inputs.get("reason"))
@@ -85,9 +85,10 @@ class NodeKeyedRouting(unittest.TestCase):
             status, _ = scheduler.run_wf(wf_fqdn=WF_FQDN, payload={}, pkg=pkg,
                                          writer=writer, data_root=tmp)
             writer.close()
-            announced = [e["detail"]["ev_fqdn"] for f in Path(tmp).glob("*.jsonl")
-                         for e in map(json.loads, f.read_text().splitlines())
-                         if e.get("event_type") == "EVENT"]
+            events = [e for f in Path(tmp).glob("*.jsonl") for e in map(json.loads, f.read_text().splitlines())]
+        self.routes = [(e["detail"]["from_node"], e["result_status"], e["detail"]["to_node"])
+                       for e in events if e.get("event_type") == "WF_ROUTE"]
+        announced = [e["detail"]["ev_fqdn"] for e in events if e.get("event_type") == "EVENT"]
         return status, reasons, announced
 
     def test_the_first_place_refuses_to_its_own_refusal(self):
@@ -104,6 +105,14 @@ class NodeKeyedRouting(unittest.TestCase):
         self.assertEqual(reasons, ["none"])
         self.assertEqual(responded, ["probe::EV_RESPONDED_V0"])
         self.assertEqual(refused, ["probe::EV_REFUSED_V0"])
+
+    def test_the_trace_names_each_place_the_run_passed_through(self):
+        self.run_with(["SUCCESS", "SUCCESS"])
+        self.assertEqual(self.routes, [
+            ("CONFIRM_STOPPED", "SUCCESS", "CONFIRM_FINISHED"),
+            ("CONFIRM_FINISHED", "SUCCESS", "RECORD_RESPONDED"),
+            ("RECORD_RESPONDED", "SUCCESS", "EXIT_RESPONDED"),
+        ])
 
 
 if __name__ == "__main__":

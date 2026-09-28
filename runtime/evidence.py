@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 
-CLASSIFICATION_FQDN = "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V0"
+CLASSIFICATION_FQDN = "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V1"
 
 
 def _content_classification(snapshot_root: Path) -> dict[str, list[str]]:
@@ -53,6 +53,9 @@ def _content_classification(snapshot_root: Path) -> dict[str, list[str]]:
         return {
             "determinative": list(fm["determinative_fields"]["entries"]),
             "observational": list(fm["observational_fields"]["entries"]),
+            # Observational wherever it appears, inside a determinative field included — a value a
+            # store assigns from the clock as it writes, such as the identity of an appended record.
+            "observational_keys": list(fm["observational_keys"]["entries"]),
         }
     raise RuntimeError(
         f"{CLASSIFICATION_FQDN} is not in the composition at {snapshot_root} — the "
@@ -107,7 +110,7 @@ class TraceWriter:
         # no access to the producing system (EV-16, AI-16).
         classification = _content_classification(snapshot_root)
         self._fh.write(json.dumps({
-            "trace_schema_version": "v0",
+            "trace_schema_version": "v1",
             "event_type": "trace_classification",
             "classified_by": CLASSIFICATION_FQDN,
             # Which closure applied — `3e` §3.1 point 1. At execution the sealed snapshot IS the
@@ -133,8 +136,11 @@ class TraceWriter:
         # Observation: a governed domain event (EV_) emitted during execution, recorded in the trace.
         self._emit("EVENT", detail={"ev_fqdn": ev_fqdn, "payload": payload})
 
-    def cc_start(self, cc_addr: int, cc_fqdn: str, cc_inputs: dict[str, Any]) -> None:
-        self._emit("CC_START", cc_addr=cc_addr, detail={"cc_fqdn": cc_fqdn, "inputs": cc_inputs})
+    def cc_start(self, cc_addr: int, cc_fqdn: str, cc_inputs: dict[str, Any], node: str = "") -> None:
+        # `node` is the place in the workflow, `cc_fqdn` the contract it runs. One contract may run at
+        # several places, so the contract alone does not say which place ran.
+        self._emit("CC_START", cc_addr=cc_addr,
+                   detail={"cc_fqdn": cc_fqdn, "node": node, "inputs": cc_inputs})
 
     def cc_step(
         self,
@@ -184,18 +190,20 @@ class TraceWriter:
         cc_fqdn: str,
         result_status: str,
         outputs: dict[str, Any],
+        node: str = "",
     ) -> None:
         self._emit(
             "CC_COMPLETE",
             cc_addr=cc_addr,
             result_status=result_status,
-            detail={"cc_fqdn": cc_fqdn, "output_keys": list(outputs.keys())},
+            detail={"cc_fqdn": cc_fqdn, "node": node, "output_keys": list(outputs.keys())},
         )
 
     def wf_complete(self, result_status: str) -> None:
         self._emit("WF_COMPLETE", result_status=result_status, detail={"wf_fqdn": self._wf_fqdn})
 
-    def route(self, from_addr: int | None, condition: str, to_addr: int | None) -> None:
+    def route(self, from_addr: int | None, condition: str, to_addr: int | None,
+              from_node: str = "", to_node: str | None = None) -> None:
         """The routing determination — `3e` §3.1 point 4, the dominant consequence.
 
         The trace recorded the sequence of nodes and not the decision that produced it. A reader
@@ -204,9 +212,14 @@ class TraceWriter:
         checkable against the representation rather than merely consistent with it (EX-15).
 
         `to_addr` None is terminal: the outcome routed nowhere, which is the traversal ending.
+
+        The addresses name contracts; `from_node` and `to_node` name the places. A place is what the
+        workflow routes between, and one contract may run at several, so only the node keys say which
+        transition was taken. At an ending, `to_node` is the declared ending reached; it is None
+        where an outcome reached neither routing nor an ending.
         """
         self._emit("WF_ROUTE", cc_addr=from_addr, step_addr=to_addr, result_status=condition,
-                   detail={"terminal": to_addr is None})
+                   detail={"terminal": to_addr is None, "from_node": from_node, "to_node": to_node})
 
     def error(self, message: str, **extra: Any) -> None:
         self._emit("ERROR", detail={"message": message, **extra})
@@ -227,7 +240,7 @@ class TraceWriter:
         detail: dict[str, Any] | None = None,
     ) -> None:
         event = {
-            "trace_schema_version": "v0",
+            "trace_schema_version": "v1",
             "trace_id":      self._trace_id,
             "event_type":    event_type,
             "domain":        self._domain,
