@@ -30,6 +30,7 @@ from pathlib import Path
 
 from runtime.api import run_workflow
 from runtime.boot import boot, default_snapshot_root
+from runtime.federation.defaults import COORDINATOR_BIND, COORDINATOR_PORT
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +123,8 @@ def _build_parser() -> argparse.ArgumentParser:
         p.add_argument("--snapshot", metavar="PATH", help="Assembled snapshot root (or PGC_SNAPSHOT_ROOT)")
         p.add_argument("--data-root", dest="data_root", metavar="PATH",
                        help="Evidence store mount (or PGC_DATA_ROOT)")
-    co_p.add_argument("--bind", default=os.environ.get("PGC_COORDINATOR_BIND", "127.0.0.1"))
-    co_p.add_argument("--port", type=int, default=int(os.environ.get("PGC_COORDINATOR_PORT", "8100")))
+    co_p.add_argument("--bind", default=os.environ.get("PGC_COORDINATOR_BIND", COORDINATOR_BIND))
+    co_p.add_argument("--port", type=int, default=int(os.environ.get("PGC_COORDINATOR_PORT", COORDINATOR_PORT)))
     wk_p.add_argument("--coordinator", metavar="URL", help="Coordinator URL (or PGC_COORDINATOR_URL)")
     wk_p.add_argument("--id", dest="worker_id", metavar="NAME", help="Worker identity; default: hostname")
 

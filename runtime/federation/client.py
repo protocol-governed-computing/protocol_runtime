@@ -11,9 +11,10 @@ import urllib.request
 from typing import Any
 
 from runtime.coordinator import CoordinationRefused
+from runtime.federation.defaults import CONNECT_TIMEOUT_S, OUTCOME_POLL_S
 
 
-def _call(url: str, body: dict[str, Any] | None = None, timeout: float = 10.0) -> tuple[int, dict[str, Any]]:
+def _call(url: str, body: dict[str, Any] | None = None, timeout: float = CONNECT_TIMEOUT_S) -> tuple[int, dict[str, Any]]:
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="GET" if body is None else "POST",
                                      headers={"Content-Type": "application/json"})
@@ -50,7 +51,7 @@ def _call_awaited(url: str, body: dict[str, Any] | None = None) -> tuple[int, di
     and a caller that gave up then could be told a unit failed that is later admitted and executed.
     """
     parts = urllib.parse.urlsplit(url)
-    connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=10.0)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=CONNECT_TIMEOUT_S)
     try:
         connection.connect()
     except OSError as exc:
@@ -67,7 +68,7 @@ def _call_awaited(url: str, body: dict[str, Any] | None = None) -> tuple[int, di
 
 
 def submit_and_wait(coordinator_url: str, *, wf_fqdn: str, payload: dict[str, Any], snapshot_id: str,
-                    poll: float = 0.1) -> dict[str, Any]:
+                    poll: float = OUTCOME_POLL_S) -> dict[str, Any]:
     """Enqueue a unit and return its outcome record once a worker has written one.
 
     **Block, never misreport.** A failure is raised only while it is still true that nothing was

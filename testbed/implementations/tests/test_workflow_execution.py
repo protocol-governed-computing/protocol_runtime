@@ -15,6 +15,7 @@ Execution path:
     run_wf(wf_fqdn, payload, pkg, writer, data_root) → (status, surface)
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -78,6 +79,8 @@ class TestWorkflowExecution(unittest.TestCase):
             domain=self._DOMAIN,
             wf_addr=wf_addr,
             wf_fqdn=wf_fqdn,
+            snapshot_root=Path(self.snapshot_root),
+            snapshot_id=json.loads((Path(self.snapshot_root) / "manifest.json").read_text())["snapshot_id"],
         )
 
         try:
