@@ -122,6 +122,22 @@ earlier, where it could be reviewed.
 
 Every arrow above was constructed at compile time. The runtime supplies the walking, never the map.
 
+The boot happens once per process, not once per run: a booted snapshot stays resident and is verified
+afresh only when its manifest changes. A run then writes its trace and nothing else; a picture of the
+path is drawn when someone asks for one.
+
+**A node is a place, not a contract.** A workflow may run one contract at several places; each is a
+node key, and routing is looked up by node. The compiler seals each place's transitions separately.
+
+**A step is one of three kinds of transform**, each under its own constitution: a deterministic atom,
+a non-deterministic atom, or a molecule. A molecule has no implementation; the dispatcher runs its
+declared steps. A non-deterministic atom's result is recorded where it is produced, nothing routes on
+it until a deterministic step has judged it, and a replay substitutes the recorded result.
+
+**The traversal may be spread across nodes.** Under a federated placement, a coordinator hands units
+of work to workers over a shared store. Nothing about the map changes: every node walks the same
+sealed graph, and under the signed profile none walks it before verifying the snapshot's signature.
+
 ## 6. Evidence
 
 Execution produces a **trace**: an ordered record of the traversal, written as it happens rather than
@@ -132,7 +148,13 @@ reconstructed afterwards.
 | `WF_START` / `WF_COMPLETE` | a workflow traversal began / ended |
 | `CC_START` / `CC_COMPLETE` | a capability contract began / ended |
 | `CC_STEP` | one step within a contract ran |
+| `CT_STEP` | one atom a transform ran, at any depth of a molecule; a non-deterministic atom's values are recorded here |
+| `WF_ROUTE` | the traversal left a node on a declared outcome, naming the node |
 | `EVENT` | a declared domain moment was announced |
+| `ERROR` | a structural failure ended the traversal |
+
+Every line conforms to `SCHEMA_TRACE_EVENT_V1`, and the regression checks every trace a run writes
+against it.
 
 The trace exists to make a claim checkable. *"This ran and conformed"* is an assertion; the trace is
 what turns it into something a second party can verify without trusting the first. It records the
@@ -155,8 +177,10 @@ runtime/
     memory.py       one run's execution context
     evidence.py     trace emission
     trace_viz.py    rendering a trace for reading
-    conformance.py  runtime conformance checks
-    examine/        inspection of a completed run
+    replay.py       re-execution from recorded outcomes
+    conformance.py  a compiled domain's test vectors, run against its transforms
+    federation/     coordinator, worker and the shared store they schedule through
+    examine/        reading a completed trace
 
 testbed/            worked runs against known snapshots
 ```

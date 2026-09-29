@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import functools
 import os
-import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from runtime.boot import boot, default_snapshot_root
+from runtime.boot import BootedSnapshot, boot, default_snapshot_root
 from runtime.evidence import TraceWriter, make_trace_id
 from runtime.scheduler import run_wf
 
@@ -46,7 +46,7 @@ def run_workflow(
     data_root = Path(data_root)
     domain = wf_fqdn.split("::")[0]
 
-    booted = boot(snapshot_root)
+    booted = resident(snapshot_root)
     pkg = booted.domains.get(domain)
     if pkg is None:
         raise RuntimeError(
@@ -75,27 +75,51 @@ def run_workflow(
         writer.error(str(exc))
         raise
     finally:
+        # The JSONL is the evidence. A picture of the path is a view of it, drawn on request
+        # (`run --behavior-logic`, or `behavior-logic <trace>`), never as a cost of every run.
         writer.close()
-        _render_path(booted.snapshot_root, trace_dir, trace_id)
 
     return RunResult(status=status, surface=surface or {}, trace_id=trace_id, trace_dir=trace_dir)
 
 
-def _render_path(snapshot_root: Path, trace_dir: Path, trace_id: str) -> None:
-    """Write the run's path over its workflow's graph, `<trace_id>.png`, next to the trace.
+# Warm boot is load once, verify once. Every call booting afresh re-verified the whole snapshot from
+# its bytes on each run — about 60% of a run's time, repeated by every server, worker and suite that
+# calls this in a loop. The package a boot produces is frozen, and nothing reads the snapshot again
+# after it, so one verified boot serves every run against the same snapshot.
+#
+# What makes it the same snapshot is the manifest — its identity, and the file itself — together
+# with what acceptance was judged against: the trust anchor and the profile root. A rebuild in place
+# rewrites the manifest, so it is verified afresh. `boot()` itself is never cached: the CLI's `boot`
+# and anything asking for acceptance get the full determination every time.
+_RESIDENT: dict[tuple, BootedSnapshot] = {}
+_RESIDENT_LOCK = threading.Lock()
+_RESIDENT_LIMIT = 4
 
-    A projection of the trace, never part of it: the JSONL is the evidence, and nothing reads the
-    picture back. So it cannot fail a run — no graphviz, or a workflow the snapshot publishes no graph
-    for, means no picture and nothing else. `PGC_TRACE_PNG=0` turns it off, for runs where rendering
-    costs more than it shows (deployment configuration, rulings.md C2/C3).
-    """
-    if os.environ.get("PGC_TRACE_PNG", "1") == "0" or shutil.which("dot") is None:
-        return
-    from runtime.trace_viz import render_trace_png
+
+def _resident_key(root: Path) -> tuple | None:
+    manifest = root / "manifest.json"
     try:
-        render_trace_png(Path(snapshot_root), trace_dir / f"{trace_id}.jsonl")
-    except (FileNotFoundError, ValueError, KeyError):
-        pass
+        stat = manifest.stat()
+    except FileNotFoundError:
+        return None
+    return (str(root), stat.st_mtime_ns, stat.st_size,
+            os.environ.get("PGC_TRUST_ROOT_PUBKEY"), os.environ.get("PGC_SNAPSHOT_PROFILES"))
+
+
+def resident(snapshot_root: str | Path | None = None) -> BootedSnapshot:
+    """The booted snapshot at `snapshot_root`, verified once per process and per manifest."""
+    given = Path(snapshot_root) if snapshot_root is not None else default_snapshot_root()
+    key = _resident_key(given.resolve())
+    if key is None:
+        return boot(given)          # no manifest: let boot refuse it, and say why
+    with _RESIDENT_LOCK:
+        booted = _RESIDENT.get(key)
+        if booted is None:
+            booted = boot(given)
+            if len(_RESIDENT) >= _RESIDENT_LIMIT:
+                _RESIDENT.pop(next(iter(_RESIDENT)))
+            _RESIDENT[key] = booted
+        return booted
 
 
 @functools.lru_cache(maxsize=8)
@@ -139,7 +163,7 @@ def invoke_workflow(
             "the snapshot places execution on FEDERATED_NODE and PGC_COORDINATOR_URL is not set: "
             "this node does not execute, and has nowhere to send the work."
         )
-    booted = boot(root)     # a boundary acts on no snapshot it has not authenticated (OB-1)
+    booted = resident(root)  # a boundary acts on no snapshot it has not authenticated (OB-1)
     outcome = submit_and_wait(coordinator_url.rstrip("/"), wf_fqdn=wf_fqdn, payload=payload,
                               snapshot_id=booted.snapshot_id)
     if outcome.get("state") != "executed":

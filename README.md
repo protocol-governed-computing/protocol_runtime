@@ -52,17 +52,17 @@ payload         external input (JSON)
 data-root       the state storage boundary; one data root is one instance
 ```
 
-A run writes an append-only trace alongside the state its declared side effects produce:
+A run writes an append-only trace beside the state its declared side effects produce, both under
+the data root:
 
 ```
-traces/<TRACE_ID>/
-    <TRACE_ID>.jsonl    append-only execution log
-    <TRACE_ID>.md       human-readable summary
-    <TRACE_ID>.png      the execution path, rendered
+<data-root>/traces/<domain>/<WF>/<TRACE_ID>/
+    <TRACE_ID>.jsonl    append-only execution log, one SCHEMA_TRACE_EVENT_V1 event per line
+    <TRACE_ID>.png      the path the run took, drawn only on request (`run --behavior-logic`,
+                        or `behavior-logic <trace>`)
 
-data/
-    registry/           idempotent state
-    events/             append-only history
+<data-root>/<domain>/<subdomain>/
+    the stores the domain's runtime binding declares
 ```
 
 ## Running
@@ -74,15 +74,18 @@ data/
 ./run.sh examine /abs/trace.jsonl
 ```
 
-`run.sh` wraps the CLI, also installed as the `protocol_runtime` console script, with four
-subcommands:
+`run.sh` wraps the CLI, also installed as the `protocol_runtime` console script:
 
 | command | what it does |
 |---|---|
 | `run` | execute a workflow against a data root |
+| `replay` | re-execute a run from its recorded outcomes and compare it with the original |
+| `conformance` | run a compiled domain's test vectors; report each transform proven, unproven or refused |
 | `boot` | warm-boot the assembled snapshot — load and hash-verify every manifest domain |
-| `examine` | analyze a completed trace file |
-| `behavior-logic` | render the execution path from a completed trace as a PNG |
+| `coordinator` | serve as the coordinating node of a federated node group |
+| `worker` | serve as a worker node of a federated node group |
+| `examine` | read a completed trace: its path by node, contracts, results, events and errors |
+| `behavior-logic` | render the path a completed trace took as a PNG |
 
 `PGC_SNAPSHOT_ROOT` overrides the snapshot location; `PGC_IMPL_ROOTS` is the colon-separated set of
 roots on `PYTHONPATH` for domain capability implementations.
@@ -90,6 +93,12 @@ roots on `PYTHONPATH` for domain capability implementations.
 **Warm reboot is its own proof.** Bringing every manifest domain resident and hash-verified
 establishes that the snapshot is intact and executable before any workflow runs. A surface-only
 snapshot has no workflow to traverse, and warm reboot is exactly what proves it sound anyway.
+
+**A process verifies a snapshot once.** `runtime.api` keeps a booted snapshot resident and runs
+against it as often as it is asked. A rewritten manifest, or a different trust anchor or profile
+root, is verified afresh, and a snapshot that no longer verifies is refused. `boot` itself always
+performs the full determination. A governed run then costs a few milliseconds, not a third of a
+second.
 
 **A data root is an instance, not an interface.** Two data roots against the same snapshot are two
 independent instances of the same governed behavior.
@@ -101,6 +110,21 @@ walks the workflow node by node. At each node it executes the capability contrac
 invoking transforms, applying side effects — and routes on the declared outcome. It resolves
 nothing by name at execution time: the compiler assigned integer addresses, and traversal operates
 on those.
+
+**A workflow may run one contract at several places.** Each place is a node key, and the contract
+it runs is named separately. The compiler seals each place's routing on its own, and refuses a sealed
+dispatch that does not realize every transition declared at that node. Routing is by node, and the
+trace names the place that ran.
+
+**Not every step is determined by its inputs.** A transform is a deterministic atom, a
+non-deterministic atom, or a molecule, and a different constitution governs each. A molecule has no
+implementation: the runtime runs its declared steps. A non-deterministic atom's result is recorded
+where it is produced, and `replay` substitutes the recorded result, so a run is reproducible even
+when a step is not.
+
+**One snapshot can run across nodes.** Under a federated placement, a coordinator schedules units of
+work to workers over a shared store. Under the signed federated profile, every node verifies the
+snapshot's signature before it runs anything.
 
 Every step emits evidence. The trace is not a log the runtime chose to write; it is the record of
 the path actually taken through a graph that was fixed before the run began, which is what makes a
@@ -140,13 +164,14 @@ pgc            # reports what is installed and whether the anchor resolves
 
 `PGC_DOMAIN_ROOTS` names an additional domain contributing its own `registry/structures` — the
 directory that *directly contains* it, not the repository above it; pointing one level too high is a
-silent no-op. `PGC_SNAPSHOT_ROOT` is where compiled output is written, and each domain build needs
-its own: every layer's output consolidates into one root, and verification rejects any file in that
-root the current build did not declare. `PGC_SNAPSHOT_PROFILES` is the directory holding snapshot
-profiles, required by the assembler and the runtime alike.
+silent no-op. `PGC_SNAPSHOT_PROFILES` is the directory holding snapshot profiles, required by the
+assembler and the runtime alike.
 
-`PGC_BUILD_ROOT` is accepted and reported and **nothing reads it** — `PGC_SNAPSHOT_ROOT` is the
-anchor that controls output.
+**Where a build writes is declared, not supplied.** Each build configuration names its root in
+`output_configuration.root`, and every layer's output consolidates there. The compiler does not read
+`PGC_SNAPSHOT_ROOT`; the runtime does, with its own meaning — the assembled snapshot to execute.
+
+`PGC_BUILD_ROOT` is accepted and reported and **nothing reads it**.
 
 The full sequence, with the repositories it needs, is in
 [`pgc_install`](https://github.com/protocol-governed-computing/pgc_install).
