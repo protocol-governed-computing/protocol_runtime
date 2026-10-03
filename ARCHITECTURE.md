@@ -176,7 +176,7 @@ runtime/
     ct_execute.py   transform invocation
     memory.py       one run's execution context
     evidence.py     trace emission
-    trace_viz.py    rendering a trace for reading
+    trace_viz.py    rendering a run for reading — draws the inspector's explanation; reads no trace itself
     replay.py       re-execution from recorded outcomes
     conformance.py  a compiled domain's test vectors, run against its transforms
     federation/     coordinator, worker and the shared store they schedule through

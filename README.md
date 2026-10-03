@@ -85,7 +85,7 @@ the data root:
 | `coordinator` | serve as the coordinating node of a federated node group |
 | `worker` | serve as a worker node of a federated node group |
 | `examine` | read a completed trace: its path by node, contracts, results, events and errors |
-| `behavior-logic` | render the path a completed trace took as a PNG |
+| `behavior-logic` | render a completed trace as a PNG: the path, each route's outcome, and why each node decided as far as the trace records it (drawn from the inspector's `si.execution.explain`; needs `pgc-runtime[render]`) |
 
 `PGC_SNAPSHOT_ROOT` overrides the snapshot location; `PGC_IMPL_ROOTS` is the colon-separated set of
 roots on `PYTHONPATH` for domain capability implementations.

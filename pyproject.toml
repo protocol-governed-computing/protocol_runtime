@@ -32,6 +32,9 @@ dependencies = []
 
 [project.optional-dependencies]
 reference = ["pgc-governance>=2.0.0"]
+# The PNG projection (`--behavior-logic`, `behavior-logic`) draws the inspector's explanation of a
+# run. Execution never imports the inspector; only `runtime.trace_viz` does.
+render = ["pgc-inspector>=4.0.0"]
 
 [project.scripts]
 protocol_runtime = "runtime.cli:main"

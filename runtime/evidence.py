@@ -149,13 +149,20 @@ class TraceWriter:
         step_fqdn: str,
         op: str | None,
         result: dict[str, Any],
+        checks: list[dict[str, Any]] | None = None,
     ) -> None:
+        detail: dict[str, Any] = {"step_fqdn": step_fqdn, "result_keys": list(result.keys())}
+        # An admission step carries the checks it evaluated — what was determined, not only the
+        # outcome (`3e` §3.1 point 3). Determinative: the same payload and contract give the same
+        # checks, so a faithful replay reproduces them.
+        if checks is not None:
+            detail["checks"] = checks
         self._emit(
             "CC_STEP",
             cc_addr=cc_addr,
             step_addr=step_addr,
             step_op=op,
-            detail={"step_fqdn": step_fqdn, "result_keys": list(result.keys())},
+            detail=detail,
         )
 
     def ct_step(self, cc_addr: int, step_addr: int, record: dict[str, Any]) -> None:

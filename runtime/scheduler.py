@@ -54,12 +54,17 @@ _MAX_HOPS = 64
 # Public API
 # ---------------------------------------------------------------------------
 
-def _admit(payload: dict, contract: dict) -> str:
-    """Determine admission against the gate's declared input contract — ACK or NACK.
+def _admit(payload: dict, contract: dict) -> tuple[str, list[dict[str, Any]]]:
+    """Determine admission against the gate's declared input contract — ACK or NACK, and why.
 
     Determined from what the IN declares and nothing else: a required field absent, or a declared
     type unsatisfied, is NACK. The workflow routes on that outcome exactly as it routes on any other,
     so a refusal here is carried by the topology rather than raised past it.
+
+    Every declared check is evaluated and returned, held or not, so the trace evidences an admission
+    as fully as a refusal (`2f` EN-12) and a reader can see which check refused (`3e` §3.1 point 3).
+    Evaluating past the first failure changes no outcome: any failed check is NACK. The checks name
+    fields and declared types, never payload values.
 
     The IN also carries prose `extensions.admission_rules` ("each element must be a positive
     integer"). Prose determines nothing (MB-1) and is not consulted. Where a gate must enforce more
@@ -67,16 +72,16 @@ def _admit(payload: dict, contract: dict) -> str:
     """
     _TYPES = {"array": list, "string": str, "integer": int, "number": (int, float),
               "boolean": bool, "object": dict}
+    checks: list[dict[str, Any]] = []
     for field, spec in contract.items():
         present = field in payload
-        if spec.get("required") and not present:
-            return "NACK"
-        if not present:
-            continue
+        if spec.get("required"):
+            checks.append({"field": field, "rule": "required", "expected": True, "held": present})
         expected = _TYPES.get(spec.get("type"))
-        if expected is not None and not isinstance(payload[field], expected):
-            return "NACK"
-    return "ACK"
+        if present and expected is not None:
+            checks.append({"field": field, "rule": "type", "expected": spec.get("type"),
+                           "held": isinstance(payload[field], expected)})
+    return ("ACK" if all(c["held"] for c in checks) else "NACK"), checks
 
 
 class UnroutedOutcomeError(RuntimeError):
@@ -193,9 +198,9 @@ def run_wf(
                     f"admission gate {current_addr} declares no input contract — there is nothing "
                     f"to determine admission against, and absence is not permission (1c AI-6)."
                 )
-            result_status = _admit(payload, contract)
+            result_status, checks = _admit(payload, contract)
             writer.cc_step(current_addr, current_addr, pkg.vocab.fqdn(current_addr),
-                           "ADMIT", {"outcome": result_status})
+                           "ADMIT", {"outcome": result_status}, checks=checks)
 
         # Resolve result_status → condition address and route to next node.
         # Routing is looked up by the node just run, not the CC it ran. Values are

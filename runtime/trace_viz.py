@@ -1,41 +1,41 @@
 """
-trace_viz.py — Evidence projection: execution path behavior logic.
+trace_viz.py — Evidence projection: a run drawn over its workflow, with why it went where it went.
 
-Reads a completed trace (.jsonl) and the compiled workflow graph (.graph.json)
-from the protocol snapshot behavior_logic directory, then generates a PNG with
-the actual execution path overlaid in red on the static compiled graph.
+A client of the snapshot inspector, never a second reader of the trace. It asks two questions of
+`inspector.api.query` and draws the answers:
 
-This is Evidence Projection — not a runtime execution feature:
+    si.behavior_logic.show   the workflow's declared graph (every node and edge)
+    si.execution.explain     the run: the path, each route's outcome, each node's determination
+                             as far as the trace records it, captured inputs, how the run ended
+    ──────────────────────
+    → <trace_id>.png beside the trace
 
-    topology (graph.json)
-    +
-    evidence (trace.jsonl)
-    ───────────────────────
-    → execution path PNG
+It derives nothing. The inspector resolves the workflow's domain, ties the trace to the snapshot
+(and refuses a trace produced under another), and separates what the trace recorded from what it
+joined from the snapshot. This module only chooses how each answer looks:
 
-Inputs (both already materialized, read-only):
-    protocol_snapshot/behavior_logic/<WF_CODE>/<WF_CODE>.graph.json
-    traces/<domain>/<wf_code>/<trace_id>/<trace_id>.jsonl
+- **recorded** (from the trace) is drawn in red: the path, the outcome on each route taken, a
+  gate's failed checks, a node's recorded outcome, errors, captured inputs;
+- **joined** (from the snapshot) is drawn in grey: each node's declared capability;
+- **declared but not taken** is drawn pale, as before;
+- a route the run took that the graph does not declare is drawn dashed.
 
-Output:
-    traces/<domain>/<wf_code>/<trace_id>/<trace_id>.png
+The inspector is imported here and nowhere else in the runtime: execution never depends on it,
+and only this optional projection does (`pgc-runtime[render]`).
 
-Architectural invariant:
-    This module reads ONLY from:
-      - protocol_snapshot/behavior_logic/  (compiled graph artifacts)
-      - the caller-supplied trace .jsonl   (execution evidence)
-    It does NOT walk protocol_snapshot/artifacts/ or any other canonical
-    protocol location. Behavior logic overlay is read-only — no protocol interpretation.
-
-Uses graphviz (dot) — returns None silently if dot is not available.
+Uses graphviz (dot) — returns None if dot is not available.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
+from html import escape
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+
+class ExplanationRefused(ValueError):
+    """The inspector would not explain this trace against this snapshot. `str(exc)` is its reason."""
 
 
 # ---------------------------------------------------------------------------
@@ -45,76 +45,45 @@ from typing import Optional
 def render_trace_png(
     snapshot_root: Path,
     trace_path: Path,
+    trace_root: Path | None = None,
 ) -> Optional[Path]:
     """
-    Generate execution-path overlay PNG for a completed trace.
-
-    Reads CC_COMPLETE events from trace_path to reconstruct the actual
-    execution path, then overlays it (red) on the compiled workflow graph.
+    Render the explained run over its workflow graph, beside the trace.
 
     Args:
-        snapshot_root: The assembled snapshot the trace was executed against.
-        trace_path:  Path to the completed .jsonl trace file.
+        snapshot_root: The assembled snapshot the trace names.
+        trace_path:    The completed .jsonl trace.
+        trace_root:    The root the trace is named under — the run's data root. Defaults to the
+                       trace's own directory, which names the same file.
 
     Returns:
-        Path to the generated PNG, or None if graphviz is unavailable.
+        Path to the PNG, or None if graphviz is unavailable.
 
     Raises:
-        FileNotFoundError: trace_path or graph.json does not exist.
-        ValueError:        Trace is empty or missing WF_START event.
+        FileNotFoundError:   trace_path does not exist.
+        ExplanationRefused:  the inspector refused the trace or has no graph for its workflow.
     """
-    if not trace_path.exists():
+    from inspector.api import query   # optional projection; execution never imports this
+
+    trace_path = Path(trace_path).resolve()
+    if not trace_path.is_file():
         raise FileNotFoundError(f"Trace file not found: {trace_path}")
+    root = Path(trace_root).resolve() if trace_root is not None else trace_path.parent
+    reference = trace_path.relative_to(root).as_posix()
 
-    # Parse trace events
-    events: list[dict] = []
-    for line in trace_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            events.append(json.loads(line))
+    status, explanation = query("si.execution.explain", {"trace": reference}, snapshot_root,
+                                trace_root=root)
+    if status != "SUCCESS":
+        raise ExplanationRefused(explanation.get("reason", status))
+    status, logic = query("si.behavior_logic.show", {"wf": explanation["wf"]}, snapshot_root)
+    if status != "SUCCESS":
+        raise ExplanationRefused(logic.get("reason", status))
 
-    if not events:
-        raise ValueError(f"Trace file is empty: {trace_path}")
+    dot_content = _generate_dot(logic["graph"], explanation)
 
-    # Extract WF code from WF_START event
-    wf_start = next((e for e in events if e["event_type"] == "WF_START"), None)
-    if wf_start is None:
-        raise ValueError(f"No WF_START event found in: {trace_path}")
-
-    wf_fqdn = wf_start["detail"]["wf_fqdn"]
-    wf_code = wf_fqdn.split("::")[-1]  # e.g. "WF_REGISTER_ACTOR_UNVERIFIED_V0"
-
-    # Load compiled graph from protocol_snapshot/behavior_logic/
-    # The assembled snapshot publishes each workflow's graph under its domain.
-    domain = wf_fqdn.split("::")[0]
-    graph_path = snapshot_root / "behavior_logic" / domain / wf_code / f"{wf_code}.graph.json"
-    if not graph_path.exists():
-        raise FileNotFoundError(
-            f"Compiled graph not found: {graph_path}\n"
-            f"Is this the snapshot the trace was executed against?"
-        )
-
-    graph = json.loads(graph_path.read_text(encoding="utf-8"))
-
-    # Reconstruct actual execution path from trace events + graph edges
-    path = _extract_execution_path(events, graph)
-
-    # Build visited node and taken edge sets
-    visited_nodes: set[str] = set()
-    taken_edges: set[tuple[str, str, str]] = set()  # (from_node, to_node, condition)
-    for from_node, condition, to_node in path:
-        visited_nodes.add(from_node)
-        visited_nodes.add(to_node)
-        taken_edges.add((from_node, to_node, condition))
-
-    # Generate DOT source with execution-path overlay
-    dot_content = _generate_dot(graph, visited_nodes, taken_edges)
-
-    # Render: write DOT, invoke graphviz, clean up DOT
     png_path = trace_path.with_suffix(".png")
     dot_path = trace_path.with_suffix(".dot")
     dot_path.write_text(dot_content, encoding="utf-8")
-
     try:
         subprocess.run(
             ["dot", "-Tpng", str(dot_path), "-o", str(png_path)],
@@ -129,111 +98,136 @@ def render_trace_png(
 
 
 # ---------------------------------------------------------------------------
-# Path reconstruction
+# What the explanation says, reduced to what is drawn
 # ---------------------------------------------------------------------------
 
-def _extract_execution_path(
-    events: list[dict],
-    graph: dict,
-) -> list[tuple[str, str, str]]:
-    """
-    The run's path, [(from_node, condition, to_node), ...], as the trace records it.
+def _taken(explanation: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """The path as (from_node, outcome, to_node), in order — read from the explanation's visits.
 
-    Every routing determination is a `WF_ROUTE` event naming the node it left, the outcome, and the
-    node or declared ending it reached. The path is read from those, not inferred: an earlier walk
-    matched `CC_COMPLETE` events to nodes by contract code, and lost the path at the first place
-    whose key is not its contract's code. A route that reached neither routing nor an ending has no
-    `to_node`, and the path stops at the node that produced it.
-
-    Args:
-        events: Parsed JSONL trace events.
-        graph:  Compiled graph dict (from graph.json) — unused for the path, kept for the signature.
+    A route that reached neither routing nor an ending has no `to`, and the path stops at the node
+    that produced it. A visit with no node key means the trace predates node keys: refused, because
+    the path cannot be placed on the graph without guessing.
     """
     path: list[tuple[str, str, str]] = []
-    for event in events:
-        if event.get("event_type") != "WF_ROUTE":
+    for visit in explanation.get("visits", []):
+        route = visit.get("route")
+        if route is None:
             continue
-        detail = event.get("detail") or {}
-        if "from_node" not in detail:
-            raise ValueError("WF_ROUTE carries no node keys — the trace predates them; re-run it")
-        if detail.get("to_node") is None:
+        if not visit.get("node"):
+            raise ExplanationRefused("the trace's routes carry no node keys — it predates them; re-run it")
+        if route.get("to") is None:
             break
-        path.append((detail["from_node"], event.get("result_status"), detail["to_node"]))
+        path.append((visit["node"], route.get("outcome"), route["to"]))
     return path
+
+
+def _recorded_lines(visit: dict[str, Any]) -> list[str]:
+    """What the trace recorded about why this node decided as it did, as label lines."""
+    lines: list[str] = []
+    determination = visit.get("determination") or {}
+    basis = determination.get("basis")
+    if basis == "recorded admission checks":
+        failed = determination.get("failed") or []
+        if failed:
+            lines += [f"✗ {c['field']}: {c['rule']} {c['expected']}" for c in failed]
+        else:
+            lines.append(f"✓ {len(determination.get('checks') or [])} check(s) held")
+    elif basis == "capability outcome":
+        lines.append(f"→ {determination.get('outcome')}")
+    elif basis == "not recorded":
+        lines.append("checks not recorded")
+    for atom in visit.get("atoms") or []:
+        if atom.get("captured"):
+            name = (atom.get("atom") or "").split("::")[-1]
+            lines.append(f"captured: {name}{' (replayed)' if atom.get('replayed') else ''}")
+    for error in visit.get("errors") or []:
+        lines.append(f"ERROR: {error.get('message')}")
+    return lines
 
 
 # ---------------------------------------------------------------------------
 # DOT generation
 # ---------------------------------------------------------------------------
 
-def _generate_dot(
-    graph: dict,
-    visited_nodes: set[str],
-    taken_edges: set[tuple[str, str, str]],
-) -> str:
-    """
-    Generate Graphviz DOT with actual execution path highlighted in red.
+_SHAPES = {"IN": ("ellipse", "lightblue"), "CC": ("box", "lightgreen"),
+           "EXIT": ("ellipse", "lightcoral")}
 
-    Visited nodes:  red border + solid red fill.
-    Taken edges:    red, bold, red label.
-    Unvisited:      standard fill, grey border, grey edges.
+
+def _label(node_id: str, joined: str | None, recorded: list[str]) -> str:
+    """An HTML-like label: the node, then what was joined (grey), then what was recorded (red)."""
+    rows = [f"<B>{escape(node_id)}</B>"]
+    if joined:
+        rows.append(f'<FONT POINT-SIZE="10" COLOR="gray35"><I>{escape(joined)}</I></FONT>')
+    rows += [f'<FONT POINT-SIZE="10" COLOR="red3">{escape(line)}</FONT>' for line in recorded]
+    return "<" + "<BR/>".join(rows) + ">"
+
+
+def _generate_dot(graph: dict[str, Any], explanation: dict[str, Any]) -> str:
     """
+    The declared graph, with the explained run drawn over it.
+
+    Visited nodes: red border and fill, with what the trace recorded about the node.
+    Taken edges:   red, bold, labelled with the outcome that selected them.
+    Undeclared:    a route the run took that the graph does not declare — dashed red.
+    The deciding node of a declared ending carries a double border.
+    """
+    path = _taken(explanation)
+    visits = {v["node"]: v for v in explanation.get("visits", []) if v.get("node")}
+    taken_edges = {(f, t, o) for f, o, t in path}
+    ending = explanation.get("ending") or {}
+    decided_at = ending.get("decided_at") or ending.get("at")
+
+    tie = (explanation.get("tie") or {}).get("snapshot_id", "")
+    title = (f"{explanation.get('wf')}  ·  {explanation.get('status')}  ·  "
+             f"{ending.get('kind', '')}\\nsnapshot {tie[:12]} (claimed by the trace)")
     lines = [
         f'digraph "{graph["wf_id"]}" {{',
         "  rankdir=LR;",
+        f'  label="{title}"; labelloc=t; fontname="Arial";',
         '  node [fontname="Arial"];',
         "",
     ]
 
-    # --- Nodes ---
+    declared_ids = set()
     for node in graph["nodes"]:
         node_id = node["id"]
-        node_type = node["type"]
-        visited = node_id in visited_nodes
+        declared_ids.add(node_id)
+        shape, fill = _SHAPES.get(node["type"], ("box", "white"))
+        visit = visits.get(node_id)
+        capability = node.get("capability")
+        joined = capability.split("::")[-1] if capability else None
+        if visit is None:
+            lines.append(f'  "{node_id}" [label={_label(node_id, joined, [])}, shape={shape},'
+                         f" style=filled, fillcolor={fill}, color=gray];")
+            continue
+        extra = ", peripheries=2" if node_id == decided_at else ""
+        style = "filled,dashed" if visit.get("errors") else "filled"
+        lines.append(f'  "{node_id}" [label={_label(node_id, joined, _recorded_lines(visit))},'
+                     f' shape={shape}, style="{style}", fillcolor=mistyrose, color=red,'
+                     f" penwidth=2.5{extra}];")
 
-        if node_type == "IN":
-            fill = "tomato" if visited else "lightblue"
-            shape = "ellipse"
-        elif node_type == "CC":
-            fill = "tomato" if visited else "lightgreen"
-            shape = "box"
-        elif node_type == "EXIT":
-            fill = "tomato" if visited else "lightcoral"
-            shape = "ellipse"
-        else:
-            fill = "white"
-            shape = "box"
-
-        if visited:
-            lines.append(
-                f'  "{node_id}" [label="{node_id}", shape={shape},'
-                f" style=filled, fillcolor={fill}, color=red, penwidth=2.5];"
-            )
-        else:
-            lines.append(
-                f'  "{node_id}" [label="{node_id}", shape={shape},'
-                f" style=filled, fillcolor={fill}, color=gray];"
-            )
+    # A place the run reached that the graph does not declare is still drawn: it was recorded.
+    for node_id, visit in visits.items():
+        if node_id not in declared_ids:
+            lines.append(f'  "{node_id}" [label={_label(node_id, None, _recorded_lines(visit))},'
+                         f' shape=box, style="filled,dashed", fillcolor=mistyrose, color=red];')
 
     lines.append("")
 
-    # --- Edges ---
+    declared_edges = set()
     for edge in graph["edges"]:
-        from_id = edge["from"]
-        to_id = edge["to"]
-        condition = edge["condition"]
-        taken = (from_id, to_id, condition) in taken_edges
-
-        if taken:
-            lines.append(
-                f'  "{from_id}" -> "{to_id}"'
-                f' [label="{condition}", color=red, penwidth=2.5, fontcolor=red];'
-            )
+        from_id, to_id, condition = edge["from"], edge["to"], edge["condition"]
+        declared_edges.add((from_id, to_id, condition))
+        if (from_id, to_id, condition) in taken_edges:
+            lines.append(f'  "{from_id}" -> "{to_id}"'
+                         f' [label="{condition}", color=red, penwidth=2.5, fontcolor=red];')
         else:
-            lines.append(
-                f'  "{from_id}" -> "{to_id}"'
-                f' [label="{condition}", color=gray, fontcolor=gray];'
-            )
+            lines.append(f'  "{from_id}" -> "{to_id}"'
+                         f' [label="{condition}", color=gray, fontcolor=gray];')
+
+    for from_id, to_id, condition in sorted(taken_edges - declared_edges):
+        lines.append(f'  "{from_id}" -> "{to_id}"'
+                     f' [label="{condition} (undeclared)", color=red, style=dashed, fontcolor=red];')
 
     lines.append("}")
     return "\n".join(lines)

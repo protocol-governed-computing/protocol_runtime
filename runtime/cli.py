@@ -4,7 +4,7 @@ cli.py — Token-native CLI entry point for the runtime.
 Commands:
     run           — Execute a workflow against the tokenized snapshot.
     examine       — Analyze a completed trace file and print a diagnostic report.
-    behavior-logic — Render execution-path PNG from a completed trace file.
+    behavior-logic — Render a completed trace, explained, over its workflow graph (PNG).
 
 Execution path (run):
     1. Load tokenized snapshot for the domain via loader.load_domain()
@@ -13,7 +13,7 @@ Execution path (run):
     3. Open TraceWriter at traces/<domain>/<wf_code>/<trace_id>/
     4. Drive workflow topology via scheduler.run_wf()
     5. Print result summary; exit 1 on non-SUCCESS
-    6. If --behavior-logic: invoke evidence projection (trace_viz) to render PNG
+    6. If --behavior-logic: render the explained run as a PNG (trace_viz, a client of the inspector)
 
 All runtime behavior comes from the compiled tokenized_snapshot.
 The CLI does not implement any domain logic.
@@ -212,7 +212,7 @@ def _handle_run(args: argparse.Namespace) -> None:
     trace_path = trace_dir / f"{trace_id}.jsonl"
     png_path = None
     if args.behavior_logic:
-        png_path = _render_behavior_logic(snapshot_root, trace_path)
+        png_path = _render_behavior_logic(snapshot_root, trace_path, trace_root=data_root)
 
     print("=" * 60)
     print("[runtime] Workflow Complete")
@@ -391,11 +391,16 @@ def _handle_examine(args: argparse.Namespace) -> None:
 # Utilities
 # ---------------------------------------------------------------------------
 
-def _render_behavior_logic(snapshot_root: Path, trace_path: Path) -> "Path | None":
-    """Invoke evidence projection to render execution-path PNG. Best-effort."""
+def _render_behavior_logic(snapshot_root: Path, trace_path: Path,
+                           trace_root: Path | None = None) -> "Path | None":
+    """Render the explained run as a PNG. Best-effort: a refusal is reported, never drawn around."""
     from runtime.trace_viz import render_trace_png
     try:
-        return render_trace_png(snapshot_root, trace_path)
+        return render_trace_png(snapshot_root, trace_path, trace_root=trace_root)
+    except ModuleNotFoundError as exc:
+        print(f"[runtime] Behavior logic render needs the snapshot inspector "
+              f"(pgc-runtime[render]): {exc}", file=sys.stderr)
+        return None
     except (FileNotFoundError, ValueError) as exc:
         print(f"[runtime] Behavior logic render error: {exc}", file=sys.stderr)
         return None
