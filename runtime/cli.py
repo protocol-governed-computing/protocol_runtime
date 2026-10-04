@@ -1,0 +1,508 @@
+"""
+cli.py — Token-native CLI entry point for the runtime.
+
+Commands:
+    run           — Execute a workflow against the tokenized snapshot.
+    examine       — Analyze a completed trace file and print a diagnostic report.
+    behavior-logic — Render a completed trace, explained, over its workflow graph (PNG).
+
+Execution path (run):
+    1. Load tokenized snapshot for the domain via loader.load_domain()
+       — verifies topology hash against trust attestation; fails hard on mismatch
+    2. Generate deterministic trace ID from (domain, wf_fqdn, payload)
+    3. Open TraceWriter at traces/<domain>/<wf_code>/<trace_id>/
+    4. Drive workflow topology via scheduler.run_wf()
+    5. Print result summary; exit 1 on non-SUCCESS
+    6. If --behavior-logic: render the explained run as a PNG (trace_viz, a client of the inspector)
+
+All runtime behavior comes from the compiled tokenized_snapshot.
+The CLI does not implement any domain logic.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+from runtime.api import run_workflow
+from runtime.boot import boot, default_snapshot_root
+from runtime.federation.defaults import COORDINATOR_BIND, COORDINATOR_PORT
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="protocol_runtime",
+        description="PGC token-native workflow runtime — warm-boots and executes an assembled snapshot",
+    )
+    subs = parser.add_subparsers(dest="command", required=True)
+
+    # ── run ──────────────────────────────────────────────────────
+    run_p = subs.add_parser("run", help="Execute a workflow")
+
+    run_p.add_argument(
+        "--wf",
+        required=True,
+        metavar="FQDN",
+        help="Workflow FQDN (e.g. blockchain::WF_REGISTER_ACTOR_UNVERIFIED_V0)",
+    )
+    run_p.add_argument(
+        "--payload",
+        metavar="FILE",
+        help="Path to JSON payload file (omit for empty payload)",
+    )
+    run_p.add_argument(
+        "--data-root",
+        dest="data_root",
+        metavar="PATH",
+        help="Absolute instance root for CS state + traces (or set PGC_DATA_ROOT)",
+    )
+    run_p.add_argument(
+        "--snapshot",
+        dest="snapshot",
+        metavar="PATH",
+        help="Assembled snapshot root (or set PGC_SNAPSHOT_ROOT); manifest.json lives here. "
+             "Default: sibling ../snapshot",
+    )
+
+    # ── run: optional behavior-logic flag ────────────────────────
+    run_p.add_argument(
+        "--behavior-logic",
+        action="store_true",
+        dest="behavior_logic",
+        help="Render execution-path PNG after run (requires graphviz)",
+    )
+
+    # ── replay ────────────────────────────────────────────────────
+    rp_p = subs.add_parser(
+        "replay",
+        help="Re-execute a workflow from its recorded outcomes and compare it with the original",
+    )
+    rp_p.add_argument("--wf", required=True, metavar="FQDN", help="Workflow FQDN the trace executed")
+    rp_p.add_argument("--payload", metavar="FILE", help="The original payload (omit for empty)")
+    rp_p.add_argument("--trace", required=True, metavar="FILE", help="The original execution's trace (.jsonl)")
+    rp_p.add_argument("--data-root", dest="data_root", required=True, metavar="PATH",
+                      help="A fresh instance root holding the original's initial state; never the original's")
+    rp_p.add_argument("--snapshot", dest="snapshot", metavar="PATH",
+                      help="The assembled snapshot the original ran against")
+
+    cf_p = subs.add_parser(
+        "conformance",
+        help="Run a compiled domain's test vectors and report each transform proven, unproven or refused",
+    )
+    cf_p.add_argument("domain_root", metavar="DOMAIN_ROOT",
+                      help="The domain's root, holding the snapshot/compiled its compile wrote")
+    cf_p.add_argument("--snapshot-root", dest="snapshot_root", metavar="PATH",
+                      help="Where the build wrote, when not DOMAIN_ROOT/snapshot (a placement build's own root)")
+    cf_p.add_argument("--structure", dest="structure", metavar="STRUCTURE_CODE",
+                      help="The build manifest the build was compiled from, when it compiled more than one")
+
+    # ── boot ──────────────────────────────────────────────────────
+    boot_p = subs.add_parser(
+        "boot",
+        help="Warm-boot the assembled snapshot (load + hash-verify all manifest domains)",
+    )
+    boot_p.add_argument(
+        "--snapshot",
+        dest="snapshot",
+        metavar="PATH",
+        help="Assembled snapshot root (or set PGC_SNAPSHOT_ROOT); default: sibling ../snapshot",
+    )
+
+    # ── coordinator / worker (FEDERATED_NODE placement) ──────────
+    co_p = subs.add_parser("coordinator", help="Serve as the coordinating node of a federated node group")
+    wk_p = subs.add_parser("worker", help="Serve as a worker node of a federated node group")
+    for p in (co_p, wk_p):
+        p.add_argument("--snapshot", metavar="PATH", help="Assembled snapshot root (or PGC_SNAPSHOT_ROOT)")
+        p.add_argument("--data-root", dest="data_root", metavar="PATH",
+                       help="Evidence store mount (or PGC_DATA_ROOT)")
+    co_p.add_argument("--bind", default=os.environ.get("PGC_COORDINATOR_BIND", COORDINATOR_BIND))
+    co_p.add_argument("--port", type=int, default=int(os.environ.get("PGC_COORDINATOR_PORT", COORDINATOR_PORT)))
+    wk_p.add_argument("--coordinator", metavar="URL", help="Coordinator URL (or PGC_COORDINATOR_URL)")
+    wk_p.add_argument("--id", dest="worker_id", metavar="NAME", help="Worker identity; default: hostname")
+
+    # ── examine ───────────────────────────────────────────────────
+    ex_p = subs.add_parser("examine", help="Analyze a completed trace file")
+    ex_p.add_argument(
+        "trace_file",
+        metavar="FILE",
+        help="Path to a completed .jsonl trace file",
+    )
+
+    # ── behavior-logic ────────────────────────────────────────────
+    bl_p = subs.add_parser(
+        "behavior-logic",
+        help="Render execution-path PNG from a completed trace file",
+    )
+    bl_p.add_argument(
+        "trace_file",
+        metavar="FILE",
+        help="Path to a completed .jsonl trace file",
+    )
+    bl_p.add_argument(
+        "--snapshot",
+        metavar="PATH",
+        help="Absolute path to the assembled snapshot the trace ran against "
+             "(or set PGC_SNAPSHOT_ROOT; default: the sibling ../snapshot)",
+    )
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+def _handle_run(args: argparse.Namespace) -> None:
+    wf_fqdn = args.wf
+
+    # Extract domain from FQDN (part before ::)
+    if "::" not in wf_fqdn:
+        _fatal(f"Invalid WF FQDN (expected <domain>::<CODE>): {wf_fqdn!r}")
+    domain = wf_fqdn.split("::")[0]
+
+    # Resolve paths from args or environment
+    data_root_str = args.data_root or os.environ.get("PGC_DATA_ROOT")
+    if not data_root_str:
+        _fatal("--data-root PATH or PGC_DATA_ROOT is required (instance root for CS state + traces)")
+    data_root = Path(data_root_str)
+    if not data_root.is_absolute():
+        _fatal(f"--data-root must be an absolute path, got: {data_root_str}")
+
+    # Snapshot root: arg or env, else the default sibling ../snapshot (resolved by boot).
+    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
+    snapshot_root = Path(snapshot_str) if snapshot_str else default_snapshot_root()
+    if not snapshot_root.is_absolute():
+        _fatal(f"--snapshot must be an absolute path, got: {snapshot_str}")
+
+    # Load payload
+    payload = _load_payload(args.payload)
+
+    # Drive the workflow via the programmatic API. The API warm-boots the snapshot (manifest root
+    # of trust), opens the trace under the instance root, and returns status + surface.
+    print(f"[runtime] Booting snapshot for {domain}...")
+    t0 = time.monotonic()
+    try:
+        run = run_workflow(wf_fqdn=wf_fqdn, payload=payload,
+                           data_root=str(data_root), snapshot_root=snapshot_root)
+    except KeyError as exc:
+        _fatal(f"WF FQDN not in vocab: {exc}")
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _fatal(str(exc))
+    except Exception as exc:
+        _fatal(f"Runtime error: {exc}")
+
+    result_status, surface = run.status, run.surface
+    trace_id, trace_dir = run.trace_id, run.trace_dir
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    print(f"[runtime] Workflow:  {wf_fqdn}")
+    print(f"[runtime] Trace ID:  {trace_id}")
+    print(f"[runtime] Trace dir: {trace_dir}")
+    print()
+
+    # Evidence projection: render execution-path PNG if requested
+    trace_path = trace_dir / f"{trace_id}.jsonl"
+    png_path = None
+    if args.behavior_logic:
+        png_path = _render_behavior_logic(snapshot_root, trace_path, trace_root=data_root)
+
+    print("=" * 60)
+    print("[runtime] Workflow Complete")
+    print("=" * 60)
+    print(f"Workflow:   {wf_fqdn}")
+    print(f"Status:     {result_status}")
+    print(f"Trace ID:   {trace_id}")
+    print(f"Duration:   {duration_ms}ms")
+    if surface:
+        print("Output:")
+        print(_format_surface(surface))
+    if png_path:
+        print(f"Graph:      {png_path}")
+    elif args.behavior_logic:
+        print("Graph:      (graphviz not available — PNG skipped)")
+    print("=" * 60)
+
+    if result_status not in ("SUCCESS", "ALREADY_EXISTS"):
+        sys.exit(1)
+
+
+def _handle_boot(args: argparse.Namespace) -> None:
+    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
+    snapshot_root = Path(snapshot_str) if snapshot_str else default_snapshot_root()
+
+    print(f"[runtime] Warm-booting assembled snapshot: {snapshot_root}")
+    try:
+        booted = boot(snapshot_root)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _fatal(str(exc))
+    except Exception as exc:
+        _fatal(f"Boot error: {exc}")
+
+    print("=" * 60)
+    print("[runtime] Warm reboot complete — snapshot resident + hash-verified")
+    print("=" * 60)
+    print(booted.summary())
+    print("=" * 60)
+    print(_health_line(snapshot_root, booted))
+    print("=" * 60)
+
+
+def _federation_roots(args: argparse.Namespace) -> tuple[Path, Path]:
+    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
+    data_str = args.data_root or os.environ.get("PGC_DATA_ROOT")
+    if not snapshot_str or not data_str:
+        _fatal("a federated node needs --snapshot (PGC_SNAPSHOT_ROOT) and --data-root (PGC_DATA_ROOT)")
+    return Path(snapshot_str), Path(data_str)
+
+
+def _handle_coordinator(args: argparse.Namespace) -> None:
+    from runtime.coordinator import CoordinationRefused
+    from runtime.federation.coordinator import FederatedCoordinator, serve
+
+    snapshot_root, data_root = _federation_roots(args)
+    try:
+        coordinator = FederatedCoordinator(snapshot_root, data_root)
+    except (CoordinationRefused, RuntimeError, FileNotFoundError) as exc:
+        _fatal(f"coordinator refused to start: {exc}")
+    serve(coordinator, args.bind, args.port)
+
+
+def _handle_worker(args: argparse.Namespace) -> None:
+    from runtime.coordinator import CoordinationRefused
+    from runtime.federation.worker import FederatedWorker
+
+    snapshot_root, data_root = _federation_roots(args)
+    url = args.coordinator or os.environ.get("PGC_COORDINATOR_URL")
+    if not url:
+        _fatal("a worker needs --coordinator (PGC_COORDINATOR_URL)")
+    try:
+        worker = FederatedWorker(snapshot_root, data_root, url.rstrip("/"), args.worker_id)
+    except (CoordinationRefused, RuntimeError, FileNotFoundError) as exc:
+        _fatal(f"worker refused to start: {exc}")
+    worker.run_forever()
+
+
+def _health_line(snapshot_root: Path, booted) -> str:
+    """Consolidated completion attestation: what warm boot verified, in one line.
+
+    Reports only checks that actually ran: every manifest domain was made resident and its hashes
+    verified against the root of trust. Governance provenance is surfaced where a domain carries it
+    (bound at compile, verified at assembly) so the health line reflects the full trust chain.
+
+    A governance surface imports no governance — it *is* the governance other domains compile
+    against, so it carries no `imported_governance` and is not counted as unbound. Counting it as
+    such reported a permanent shortfall (`4/5`) on a healthy snapshot and invited the same
+    investigation on every boot. The surface is derived from what the other attestations name, not
+    hardcoded, so a composition with a differently-named surface reports correctly too.
+    """
+    import json
+
+    n = len(booted.domains)
+    bound: set[str] = set()
+    surfaces: set[str] = set()
+    for name in booted.domains:
+        att = snapshot_root / "trust" / name / "structure_attestation.json"
+        try:
+            imported = json.loads(att.read_text(encoding="utf-8")).get("imported_governance")
+        except (OSError, ValueError):
+            continue
+        if imported:
+            bound.add(name)
+            source = imported.get("import_domain")
+            if source:
+                surfaces.add(source)
+
+    if not bound:
+        return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified. No issues."
+
+    importing = [d for d in booted.domains if d not in surfaces]
+    unbound = sorted(d for d in importing if d not in bound)
+    surface_note = f", {'/'.join(sorted(surfaces))} is the governance surface" if surfaces else ""
+
+    if unbound:
+        gov = (
+            f"; governance provenance bound for {len(bound)}/{len(importing)} importing domain(s)"
+            f"{surface_note} — UNBOUND: {', '.join(unbound)}"
+        )
+        return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified{gov}."
+
+    gov = (
+        f"; governance provenance bound for all {len(importing)} importing domain(s)"
+        f"{surface_note}"
+    )
+    return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified{gov}. No issues."
+
+
+def _handle_behavior_logic(args: argparse.Namespace) -> None:
+    trace_path = Path(args.trace_file)
+    if not trace_path.exists():
+        _fatal(f"Trace file not found: {args.trace_file}")
+
+    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
+    snapshot_root = Path(snapshot_str) if snapshot_str else default_snapshot_root()
+    if not snapshot_root.is_absolute():
+        _fatal(f"--snapshot must be an absolute path, got: {snapshot_str}")
+
+    png_path = _render_behavior_logic(snapshot_root, trace_path)
+    if png_path:
+        print(f"[runtime] Execution path PNG: {png_path}")
+    else:
+        print(
+            "[runtime] Behavior logic render skipped — graphviz (dot) not available.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _handle_examine(args: argparse.Namespace) -> None:
+    trace_path = Path(args.trace_file)
+    if not trace_path.exists():
+        _fatal(f"Trace file not found: {args.trace_file}")
+
+    # Delegate to the examine module (reads JSONL trace format)
+    try:
+        from runtime.examine import analyze, TraceParseError
+    except ImportError:
+        _fatal(
+            "Trace examiner unavailable — runtime may not be fully installed.\n"
+            "  Re-install with: pip install -e /path/to/protocol_runtime"
+        )
+
+    try:
+        report = analyze(trace_path)
+    except Exception as exc:
+        _fatal(f"Trace parse error: {exc}")
+
+    print(report.format())
+
+    if report.has_structural_failure:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+def _render_behavior_logic(snapshot_root: Path, trace_path: Path,
+                           trace_root: Path | None = None) -> "Path | None":
+    """Render the explained run as a PNG. Best-effort: a refusal is reported, never drawn around."""
+    from runtime.trace_viz import render_trace_png
+    try:
+        return render_trace_png(snapshot_root, trace_path, trace_root=trace_root)
+    except ModuleNotFoundError as exc:
+        print(f"[runtime] Behavior logic render needs the snapshot inspector "
+              f"(pgc-runtime[render]): {exc}", file=sys.stderr)
+        return None
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[runtime] Behavior logic render error: {exc}", file=sys.stderr)
+        return None
+
+
+def _load_payload(payload_path: str | None) -> dict:
+    if not payload_path:
+        return {}
+    path = Path(payload_path)
+    if not path.exists():
+        _fatal(f"Payload file not found: {payload_path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        _fatal(f"Payload file is not valid JSON: {exc}")
+
+
+def _format_surface(surface: dict) -> str:
+    """Readable, domain-agnostic rendering of a WF result surface.
+
+    Top-level keys each on their own line; a nested dict value (e.g. per-seed sequences) expands one
+    level so each entry lands on its own line with a compact value. Purely presentational — no
+    knowledge of any specific workflow.
+    """
+    lines: list[str] = []
+    for key, value in surface.items():
+        if isinstance(value, dict) and value:
+            lines.append(f"  {key}:")
+            for sub_key, sub_value in value.items():
+                lines.append(f"    {sub_key}: {json.dumps(sub_value, separators=(',', ':'))}")
+        else:
+            lines.append(f"  {key}: {json.dumps(value, separators=(',', ':'))}")
+    return "\n".join(lines)
+
+
+def _fatal(message: str) -> None:
+    print(f"[runtime] Error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def _handle_replay(args) -> None:
+    """Replay an execution and report whether it reproduced the original determination."""
+    from runtime.replay import compare
+    original = Path(args.trace)
+    data_root = Path(args.data_root)
+    if not data_root.is_absolute():
+        _fatal(f"--data-root must be an absolute path, got: {args.data_root}")
+    if original.resolve().is_relative_to(data_root.resolve()):
+        _fatal("--data-root holds the original trace; a replay needs a fresh instance root")
+    snapshot_root = Path(args.snapshot) if args.snapshot else default_snapshot_root()
+    run = run_workflow(wf_fqdn=args.wf, payload=_load_payload(args.payload), data_root=str(data_root),
+                       snapshot_root=snapshot_root, replay_trace=original)
+    same, detail = compare(original, run.trace_dir / f"{run.trace_id}.jsonl")
+    print(f"[runtime] Replay {'REPRODUCED' if same else 'DIVERGED'}: {detail}")
+    sys.exit(0 if same else 1)
+
+
+def _handle_conformance(args) -> None:
+    """Prove a compiled build's transforms. Exit 1 when any is refused or any case failed; unproven is
+    reported, not refused."""
+    from runtime.conformance import run_domain, write_result
+    root = Path(args.domain_root).resolve()
+    snapshot_root = Path(args.snapshot_root).resolve() if args.snapshot_root else None
+    result = run_domain(root, snapshot_root, args.structure)
+    out = write_result(root, result, snapshot_root)
+    for case in result.cases:
+        if not case.passed:
+            print(f"  FAIL  {case.fqdn}: {case.error}")
+    print(f"[conformance] {result.domain}: {len(result.proven)} proven, {len(result.unproven)} unproven, "
+          f"{len(result.refused)} refused, {len(result.carried)} carried from another surface "
+          f"({len(result.cases)} case(s))")
+    for fqdn in result.unproven:
+        print(f"  UNPROVEN  {fqdn}")
+    print(f"  result -> {out}")
+    sys.exit(0 if result.admitted else 1)
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.command == "run":
+        _handle_run(args)
+    elif args.command == "replay":
+        _handle_replay(args)
+    elif args.command == "conformance":
+        _handle_conformance(args)
+    elif args.command == "boot":
+        _handle_boot(args)
+    elif args.command == "coordinator":
+        _handle_coordinator(args)
+    elif args.command == "worker":
+        _handle_worker(args)
+    elif args.command == "examine":
+        _handle_examine(args)
+    elif args.command == "behavior-logic":
+        _handle_behavior_logic(args)
+
+
+if __name__ == "__main__":
+    main()
