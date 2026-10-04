@@ -1,5 +1,5 @@
 """
-parser.py — reads a completed trace as `SCHEMA_TRACE_EVENT_V1` describes it.
+parser.py — reads a completed trace as `SCHEMA_TRACE_EVENT_V2` describes it.
 
 A trace is a classification header, then events sharing one envelope. This reader refuses any other
 shape rather than guessing at it: the examiner once read RI-0's trace format and could not read one
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-TRACE_SCHEMA_VERSION = "v1"
+TRACE_SCHEMA_VERSION = "v2"
 
 _HEADER_FIELDS = ("trace_schema_version", "event_type", "classified_by", "snapshot_id")
 _ENVELOPE_FIELDS = ("trace_schema_version", "trace_id", "event_type", "domain", "wf_addr",

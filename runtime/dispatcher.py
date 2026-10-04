@@ -46,7 +46,7 @@ import json
 from typing import Any
 
 from runtime.loader import RuntimePackage
-from runtime.evidence import TraceWriter
+from runtime.evidence import RecordedRefusal, TraceWriter
 from runtime.ct_execute import execute_ct
 from runtime.ct_errors import StructuredError
 from runtime.ct_executor import CTExecutionError, CTFault
@@ -66,7 +66,7 @@ def _violation_payload(exc: StructuredError) -> dict[str, Any]:
     }
 
 
-class CapabilityFaultError(RuntimeError):
+class CapabilityFaultError(RecordedRefusal):
     """A capability failed in a way its declaration does not answer for (`3a` §4.1, `3c` §7).
 
     A transform's refusal and a side effect's returned status are outcomes, and the contract routes
@@ -76,7 +76,7 @@ class CapabilityFaultError(RuntimeError):
     """
 
 
-class UnlistedStepOutcomeError(RuntimeError):
+class UnlistedStepOutcomeError(RecordedRefusal):
     """A composed step ended with an outcome its contract declares no continuation for (`3a` EX-18).
 
     The step-level counterpart of the scheduler's `UnroutedOutcomeError`. A missing continuation is

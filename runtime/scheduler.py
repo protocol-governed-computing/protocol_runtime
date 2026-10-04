@@ -42,7 +42,7 @@ from __future__ import annotations
 from typing import Any
 
 from runtime.dispatcher import CapabilityFaultError, UnlistedStepOutcomeError, execute_cc
-from runtime.evidence import TraceWriter
+from runtime.evidence import RecordedRefusal, TraceWriter
 from runtime.loader import RuntimePackage
 from runtime.memory import ExecutionContext
 
@@ -84,7 +84,7 @@ def _admit(payload: dict, contract: dict) -> tuple[str, list[dict[str, Any]]]:
     return ("ACK" if all(c["held"] for c in checks) else "NACK"), checks
 
 
-class UnroutedOutcomeError(RuntimeError):
+class UnroutedOutcomeError(RecordedRefusal):
     """An outcome with neither declared routing nor a declared ending (EX-5, RT-9)."""
 
 

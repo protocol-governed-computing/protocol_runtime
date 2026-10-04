@@ -4,7 +4,7 @@ trace_examiner — what a completed run did, read from its trace alone.
 Public API:
     analyze(trace_path) -> DiagnosticReport
 
-Reads a trace written to `SCHEMA_TRACE_EVENT_V1` and reports the path the run took, node by node,
+Reads a trace written to `SCHEMA_TRACE_EVENT_V2` and reports the path the run took, node by node,
 the contracts it ran and their results, the events it announced, the non-deterministic results it
 recorded, and whether it completed or failed structurally. It needs no snapshot: the trace names
 the snapshot it ran under, and everything reported is in the trace.

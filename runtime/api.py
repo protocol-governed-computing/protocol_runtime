@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from runtime.boot import BootedSnapshot, boot, default_snapshot_root
-from runtime.evidence import TraceWriter, make_trace_id
+from runtime.evidence import RecordedRefusal, TraceWriter, make_trace_id
 from runtime.scheduler import run_wf
 
 
@@ -71,6 +71,9 @@ def run_workflow(
     try:
         status, surface = run_wf(wf_fqdn=wf_fqdn, payload=payload, pkg=pkg,
                                  writer=writer, data_root=str(data_root))
+    except RecordedRefusal:
+        # Recorded where it was determined; recording it again here would count it twice.
+        raise
     except Exception as exc:
         writer.error(str(exc))
         raise

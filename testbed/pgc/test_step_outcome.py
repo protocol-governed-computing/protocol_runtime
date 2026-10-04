@@ -102,8 +102,9 @@ def test_an_outcome_with_no_declared_continuation_refuses_and_runs_nothing_after
         removal = [e["detail"] for e in ev if e["event_type"] == "CC_STEP"
                    and e["detail"]["step_fqdn"].endswith("CS_REGISTRY_V0")]
         assert removal == [dict(removal[0], outcome="ALREADY_EXISTS", continuation=None)], removal
-        assert any(e["event_type"] == "ERROR" and e["detail"].get("outcome") == "ALREADY_EXISTS"
-                   for e in ev), "no ERROR records the refusal"
+        errors = [e for e in ev if e["event_type"] == "ERROR"]
+        assert len(errors) == 1 and errors[0]["detail"].get("outcome") == "ALREADY_EXISTS", \
+            f"one refusal, one record: {[e['detail'] for e in errors]}"
         assert not any(e["event_type"] == "EVENT" for e in ev), "an announcement followed the refusal"
         assert sum(e["event_type"] == "CC_START" for e in ev) == 1, "a contract ran after the refusal"
         assert [e for e in ev if e["event_type"] == "WF_COMPLETE"][-1]["result_status"] == "VIOLATION"
@@ -130,8 +131,9 @@ def refused_by_fault(replace, payload=RECLAIM) -> list[dict]:
             else:
                 raise AssertionError("a fault did not refuse the run")
         ev = events(root, "WF_AUTO_RECLAIM_V0")
-        assert any(e["event_type"] == "ERROR" and e["detail"].get("message") == "capability fault"
-                   for e in ev), "no ERROR records the fault"
+        errors = [e for e in ev if e["event_type"] == "ERROR"]
+        assert len(errors) == 1 and errors[0]["detail"].get("message") == "capability fault", \
+            f"one fault, one record: {[e['detail'].get('message') for e in errors]}"
         assert not any(e["event_type"] == "WF_ROUTE" and e["detail"].get("terminal") for e in ev), \
             "the fault was routed to an ending"
         assert not any(e["event_type"] == "EVENT" for e in ev), "an announcement followed the fault"

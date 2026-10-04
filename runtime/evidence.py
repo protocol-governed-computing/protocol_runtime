@@ -64,6 +64,15 @@ def _content_classification(snapshot_root: Path) -> dict[str, list[str]]:
     )
 
 
+class RecordedRefusal(RuntimeError):
+    """A refusal whose evidence is already written where it was determined.
+
+    The place that refuses knows why, and records it there — the node, the step, the outcome or the
+    fault. Whoever catches the exception further up must not record it again: two ERROR lines for
+    one determination read as two refusals to anything counting them.
+    """
+
+
 class ReplayRecordMissing(Exception):
     """A replay reached a non-deterministic step whose outcome the replayed execution did not record."""
 
@@ -110,7 +119,7 @@ class TraceWriter:
         # no access to the producing system (EV-16, AI-16).
         classification = _content_classification(snapshot_root)
         self._fh.write(json.dumps({
-            "trace_schema_version": "v1",
+            "trace_schema_version": "v2",
             "event_type": "trace_classification",
             "classified_by": CLASSIFICATION_FQDN,
             # Which closure applied — `3e` §3.1 point 1. At execution the sealed snapshot IS the
@@ -254,7 +263,7 @@ class TraceWriter:
         detail: dict[str, Any] | None = None,
     ) -> None:
         event = {
-            "trace_schema_version": "v1",
+            "trace_schema_version": "v2",
             "trace_id":      self._trace_id,
             "event_type":    event_type,
             "domain":        self._domain,
