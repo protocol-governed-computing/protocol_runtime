@@ -199,8 +199,11 @@ def run_wf(
                     f"to determine admission against, and absence is not permission (1c AI-6)."
                 )
             result_status, checks = _admit(payload, contract)
+            # An admission's continuation is the workflow's route, recorded by the WF_ROUTE that
+            # follows; `route` says so rather than repeating it.
             writer.cc_step(current_addr, current_addr, pkg.vocab.fqdn(current_addr),
-                           "ADMIT", {"outcome": result_status}, checks=checks)
+                           "ADMIT", {"outcome": result_status}, checks=checks,
+                           outcome=result_status, continuation="route")
 
         # Resolve result_status → condition address and route to next node.
         # Routing is looked up by the node just run, not the CC it ran. Values are

@@ -76,7 +76,7 @@ class TraceWriter:
         writer = TraceWriter(trace_dir, trace_id, domain, wf_addr, wf_fqdn)
         writer.wf_start(payload)
         writer.cc_start(cc_addr, cc_fqdn, cc_inputs)
-        writer.cc_step(cc_addr, step_addr, step_fqdn, op, result)
+        writer.cc_step(cc_addr, step_addr, step_fqdn, op, result, outcome=..., continuation=...)
         writer.cc_complete(cc_addr, result_status, outputs)
         writer.wf_complete(result_status)
         writer.close()
@@ -150,8 +150,15 @@ class TraceWriter:
         op: str | None,
         result: dict[str, Any],
         checks: list[dict[str, Any]] | None = None,
+        *,
+        outcome: str,
+        continuation: str | None,
     ) -> None:
-        detail: dict[str, Any] = {"step_fqdn": step_fqdn, "result_keys": list(result.keys())}
+        # The step's outcome and the continuation it selected (`3e` EV-19). A record of the enclosing
+        # contract's outcome alone cannot show what each composed step decided. `continuation` is
+        # None where the contract declares none for the outcome — the record of a refusal (EX-18).
+        detail: dict[str, Any] = {"step_fqdn": step_fqdn, "result_keys": list(result.keys()),
+                                  "outcome": outcome, "continuation": continuation}
         # An admission step carries the checks it evaluated — what was determined, not only the
         # outcome (`3e` §3.1 point 3). Determinative: the same payload and contract give the same
         # checks, so a faithful replay reproduces them.

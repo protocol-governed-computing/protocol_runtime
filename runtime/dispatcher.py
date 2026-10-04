@@ -65,6 +65,14 @@ def _violation_payload(exc: StructuredError) -> dict[str, Any]:
     }
 
 
+class UnlistedStepOutcomeError(RuntimeError):
+    """A composed step ended with an outcome its contract declares no continuation for (`3a` EX-18).
+
+    The step-level counterpart of the scheduler's `UnroutedOutcomeError`. A missing continuation is
+    not a default: execution refuses there, and never proceeds past it.
+    """
+
+
 class CSExecutionError(StructuredError):
     """A CS step could not be executed.
 
@@ -169,17 +177,32 @@ def execute_cc(
         # Accumulate into CC surface
         surface.update(surface_fragment)
 
-        # Emit step trace event
+        # The continuation the contract declares for this outcome. None is the absence of one, which
+        # is not a default: `3a` EX-18 requires refusal there. Proceeding past an unlisted outcome is
+        # how a failed lookup once let a person be accepted (SoSyM study, case O3).
+        action = on_result.get(result_status)
+
+        # Emit step trace event — the outcome and the continuation it selected (`3e` EV-19)
         writer.cc_step(
             cc_addr,
             step_addr,
             pkg.vocab.fqdn(step_addr),
             op,
             surface_fragment,
+            outcome=result_status,
+            continuation=action,
         )
 
-        # Route: "exit" → break pipeline; "continue" (or unlisted) → proceed
-        action = on_result.get(result_status, "continue")
+        if action is None:
+            writer.error(
+                "unlisted step outcome",
+                node=cc_addr, step=step_id, outcome=result_status,
+            )
+            writer.wf_complete("VIOLATION")
+            raise UnlistedStepOutcomeError(
+                f"step {step_id!r} of {cc_fqdn} ended with {result_status!r}, for which the "
+                f"contract declares no continuation — execution refuses rather than proceed (3a EX-18)."
+            )
         if action == "exit":
             break
 
