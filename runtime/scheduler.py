@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from runtime.dispatcher import execute_cc
+from runtime.dispatcher import CapabilityFaultError, UnlistedStepOutcomeError, execute_cc
 from runtime.evidence import TraceWriter
 from runtime.loader import RuntimePackage
 from runtime.memory import ExecutionContext
@@ -157,10 +157,16 @@ def run_wf(
             )
             cc_inputs = ctx.resolve_inputs(wf_bindings)
 
-            result_status, surface = execute_cc(
-                current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr,
-                node_key=current_node_key,
-            )
+            # A contract refuses at a step and records why; the workflow it belongs to ends refused,
+            # and completing the workflow is the scheduler's to record, not the dispatcher's.
+            try:
+                result_status, surface = execute_cc(
+                    current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr,
+                    node_key=current_node_key,
+                )
+            except (UnlistedStepOutcomeError, CapabilityFaultError):
+                writer.wf_complete("VIOLATION")
+                raise
             ctx.record_result(current_addr, surface)
 
             # Observation: a CC outcome that routes to an announcing exit states the moments that

@@ -178,7 +178,6 @@ def execute_cc(
                 "capability fault",
                 node=cc_addr, step=step_id, refusal=exc.error_code, reason=str(exc),
             )
-            writer.wf_complete("VIOLATION")
             raise CapabilityFaultError(
                 f"step {step_id!r} of {cc_fqdn} failed with {exc.error_code}: {exc} — a fault is not "
                 f"a declared outcome, and execution refuses rather than route on it (3a §4.1, 3c §7)."
@@ -217,7 +216,6 @@ def execute_cc(
                 "unlisted step outcome",
                 node=cc_addr, step=step_id, outcome=result_status,
             )
-            writer.wf_complete("VIOLATION")
             raise UnlistedStepOutcomeError(
                 f"step {step_id!r} of {cc_fqdn} ended with {result_status!r}, for which the "
                 f"contract declares no continuation — execution refuses rather than proceed (3a EX-18)."
