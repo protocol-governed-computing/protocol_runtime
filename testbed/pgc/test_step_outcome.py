@@ -7,13 +7,19 @@ and a person was accepted (SoSyM study, case O3). It now refuses there (`3a` EX-
 carried only the names of the step's results, so nothing in the trace showed the decision; it now
 records the outcome and the continuation it selected (`3e` EV-19).
 
-Runs AI Licensing's reclaim against the assembled snapshot. The refusal case has the registry's
-removal answer an outcome the reclaim contract declares nothing for, in that run only.
+A fault is not an outcome either. A transform that would not load, an atom that broke, a side
+effect that raised or stated no outcome were all turned into VIOLATION and routed as a business
+answer: a reclaim whose check could not load ended as "still active". Each now refuses the run
+(`3a` §4.1, `3c` §7), and an atom's own refusal still routes as VIOLATION.
+
+Runs AI Licensing's reclaim against the assembled snapshot. Each refusal case replaces one thing for
+that run only: the registry's answer, or the inactivity check's module.
 """
 import json
 import shutil
 import sys
 import tempfile
+from unittest import mock
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[3]
@@ -29,7 +35,8 @@ for _root in (WORKSPACE / "software_governance", WORKSPACE / "business_domains")
 
 from capability_side_effects.implementation.CS_REGISTRY_V0.impl.executor import RegistryExecutor  # noqa: E402
 from runtime import api  # noqa: E402
-from runtime.dispatcher import UnlistedStepOutcomeError  # noqa: E402
+from runtime import ct_executor  # noqa: E402
+from runtime.dispatcher import CapabilityFaultError, UnlistedStepOutcomeError  # noqa: E402
 
 RECLAIM = {"license_id": "lic-7526", "threshold_days": 30,
            "context": {"employee_id": "e-7526", "last_active_date": "2026-01-01T00:00:00Z",
@@ -104,6 +111,96 @@ def test_an_outcome_with_no_declared_continuation_refuses_and_runs_nothing_after
         RegistryExecutor.deregister = real
         shutil.rmtree(root, ignore_errors=True)
 
+
+
+INACTIVITY_MODULE = "ct_pure_evaluate_inactivity_v0"
+ACTIVE = dict(RECLAIM, context=dict(RECLAIM["context"], last_active_date="2026-05-25T00:00:00Z"))
+
+
+def refused_by_fault(replace, payload=RECLAIM) -> list[dict]:
+    """Run the reclaim with one thing replaced; assert it refused as a fault, and return the trace."""
+    root = provisioned()
+    try:
+        with replace:
+            try:
+                api.run_workflow(wf_fqdn="ai_governance::WF_AUTO_RECLAIM_V0", payload=payload,
+                                 snapshot_root=str(SNAPSHOT), data_root=str(root))
+            except CapabilityFaultError:
+                pass
+            else:
+                raise AssertionError("a fault did not refuse the run")
+        ev = events(root, "WF_AUTO_RECLAIM_V0")
+        assert any(e["event_type"] == "ERROR" and e["detail"].get("message") == "capability fault"
+                   for e in ev), "no ERROR records the fault"
+        assert not any(e["event_type"] == "WF_ROUTE" and e["detail"].get("terminal") for e in ev), \
+            "the fault was routed to an ending"
+        assert not any(e["event_type"] == "EVENT" for e in ev), "an announcement followed the fault"
+        assert [e for e in ev if e["event_type"] == "WF_COMPLETE"][-1]["result_status"] == "VIOLATION"
+        return ev
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _import_failing(name):
+    real = ct_executor.importlib.import_module
+
+    def imp(module, *a, **k):
+        if module.endswith(INACTIVITY_MODULE):
+            raise ModuleNotFoundError(f"No module named {module!r}", name=module)
+        return real(module, *a, **k)
+    return mock.patch.object(ct_executor.importlib, "import_module", imp)
+
+
+class _Broken:
+    def __getattr__(self, name):
+        def execute(inputs):
+            raise KeyError("last_active_date")
+        return execute
+
+
+def _import_broken():
+    real = ct_executor.importlib.import_module
+
+    def imp(module, *a, **k):
+        return _Broken() if module.endswith(INACTIVITY_MODULE) else real(module, *a, **k)
+    return mock.patch.object(ct_executor.importlib, "import_module", imp)
+
+
+def test_a_transform_that_will_not_load_refuses_and_is_not_routed_as_still_active():
+    ev = refused_by_fault(_import_failing(INACTIVITY_MODULE))
+    faults = [e["detail"] for e in ev if e["event_type"] == "ERROR"
+              and e["detail"].get("message") == "capability fault"]
+    assert faults[0]["refusal"] == "CT_ARTIFACT_NOT_FOUND", faults
+
+
+def test_an_atom_that_breaks_rather_than_refuses_refuses_the_run():
+    refused_by_fault(_import_broken())
+
+
+def test_a_side_effect_that_raises_refuses_the_run():
+    def crash(self, payload):
+        raise OSError("disk unavailable")
+    refused_by_fault(mock.patch.object(RegistryExecutor, "deregister", crash))
+
+
+def test_a_side_effect_that_states_no_outcome_refuses_the_run():
+    refused_by_fault(mock.patch.object(RegistryExecutor, "deregister", lambda self, payload: {}))
+
+
+def test_an_atoms_own_refusal_still_routes_as_violation():
+    root = provisioned()
+    try:
+        result = api.run_workflow(wf_fqdn="ai_governance::WF_AUTO_RECLAIM_V0", payload=ACTIVE,
+                                  snapshot_root=str(SNAPSHOT), data_root=str(root))
+        ev = events(root, "WF_AUTO_RECLAIM_V0")
+        check = [e["detail"] for e in ev if e["event_type"] == "CC_STEP"
+                 and e["detail"]["step_fqdn"].endswith("CT_PURE_EVALUATE_INACTIVITY_V0")]
+        routes = [e["detail"].get("to_node") for e in ev if e["event_type"] == "WF_ROUTE"]
+        assert check and check[0]["outcome"] == "VIOLATION" and check[0]["continuation"] == "exit", check
+        assert routes[-1] == "EXIT_ACTIVE", routes
+        assert not any(e["event_type"] == "ERROR" for e in ev), "a refusal was recorded as a fault"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 if __name__ == "__main__":
     if not (SNAPSHOT / "manifest.json").is_file():

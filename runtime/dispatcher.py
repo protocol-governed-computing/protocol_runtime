@@ -35,7 +35,7 @@ on_result actions:
     "exit"       — terminate pipeline and return this result_status
 
 Result status:
-    CT steps:  "SUCCESS" on completion, "VIOLATION" on any exception
+    CT steps:  "SUCCESS" on completion, "VIOLATION" when the atom refuses; a fault refuses the run
     CS steps:  raw_result["result_status"] (declared by the CS runtime)
 """
 
@@ -49,6 +49,7 @@ from runtime.loader import RuntimePackage
 from runtime.evidence import TraceWriter
 from runtime.ct_execute import execute_ct
 from runtime.ct_errors import StructuredError
+from runtime.ct_executor import CTExecutionError, CTFault
 
 
 def _violation_payload(exc: StructuredError) -> dict[str, Any]:
@@ -63,6 +64,16 @@ def _violation_payload(exc: StructuredError) -> dict[str, Any]:
         "node_category": exc.node_category,
         "message": str(exc),
     }
+
+
+class CapabilityFaultError(RuntimeError):
+    """A capability failed in a way its declaration does not answer for (`3a` §4.1, `3c` §7).
+
+    A transform's refusal and a side effect's returned status are outcomes, and the contract routes
+    on them. A module that will not load, a malformed seal, a capability that raises, or a result
+    carrying no status are not outcomes. Turning them into VIOLATION routed a fault as a business
+    answer: a reclaim whose check could not load ended as "still active". Execution refuses there.
+    """
 
 
 class UnlistedStepOutcomeError(RuntimeError):
@@ -151,19 +162,27 @@ def execute_cc(
         resolved_inputs = _resolve_step_inputs(inputs_spec, cc_inputs, step_results)
 
         # --- Execute step ---
-        if op is None:
-            # CT step — pure computation, zero side effects
-            result_status, raw_result = _execute_ct_step(step_addr, resolved_inputs, pkg, writer, cc_addr)
-        else:
-            # CS step — controlled side effect via declared handler
-            try:
+        # A fault is recorded and refused here, at the step, rather than routed: it is not an
+        # outcome the contract declares, and the trace must still say where execution stopped.
+        try:
+            if op is None:
+                # CT step — pure computation, zero side effects
+                result_status, raw_result = _execute_ct_step(step_addr, resolved_inputs, pkg, writer, cc_addr)
+            else:
+                # CS step — controlled side effect via declared handler
                 result_status, raw_result = _execute_cs_step(
                     step_addr, op, resolved_inputs, rb_addr, pkg, data_root, wf_executor, wf_addr
                 )
-            except StructuredError as exc:
-                # Symmetry with the CT branch: a CS that cannot be loaded or that raises is a
-                # VIOLATION the workflow routes on, not a traceback the caller receives.
-                result_status, raw_result = "VIOLATION", _violation_payload(exc)
+        except StructuredError as exc:
+            writer.error(
+                "capability fault",
+                node=cc_addr, step=step_id, refusal=exc.error_code, reason=str(exc),
+            )
+            writer.wf_complete("VIOLATION")
+            raise CapabilityFaultError(
+                f"step {step_id!r} of {cc_fqdn} failed with {exc.error_code}: {exc} — a fault is not "
+                f"a declared outcome, and execution refuses rather than route on it (3a §4.1, 3c §7)."
+            ) from exc
 
         # Apply outputs mapping: {cc_field: "$.capability_result.<ct_field>"} → surface fragment
         surface_fragment = _apply_outputs(outputs_spec, raw_result, step_results)
@@ -234,8 +253,9 @@ def _execute_ct_step(
     """
     Execute a CT (pure transform) step.
 
-    Returns ("SUCCESS", ct_outputs) on completion.
-    Returns ("VIOLATION", {}) on any exception — CT failure is a protocol violation.
+    Returns ("SUCCESS", ct_outputs) on completion, and ("VIOLATION", refusal) when the atom refuses
+    by raising `CTExecutionError` — its declared outcome. Raises `CTFault` for anything else: a
+    failure the declaration does not answer for is not routed on.
     """
     ct_entry = pkg.handlers.ct.get(ct_addr)
     if ct_entry is None:
@@ -252,19 +272,15 @@ def _execute_ct_step(
                     if writer is not None and writer.replaying else None)
         raw_result = execute_ct(ct_ir, resolved_inputs, observer=observer, recorded=recorded)
         return "SUCCESS", (raw_result if isinstance(raw_result, dict) else {})
-    except StructuredError as exc:
-        # CT refusal → protocol VIOLATION, carrying what was refused. Returning a bare {} here
-        # discarded the only account of why the step failed, which left an operator with a status
-        # and no cause.
+    except CTExecutionError as exc:
+        # The atom's refusal → protocol VIOLATION, carrying what was refused. Returning a bare {}
+        # here discarded the only account of why the step failed.
         return "VIOLATION", _violation_payload(exc)
+    except StructuredError:
+        raise
     except Exception as exc:
-        # An unstructured exception from a transform is still a VIOLATION and still must not
-        # propagate, but it is named rather than swallowed.
-        return "VIOLATION", {
-            "result_status": "VIOLATION",
-            "refusal": "CT_EXECUTION_FAILED",
-            "message": f"{type(exc).__name__}: {exc}",
-        }
+        # Unstructured, from the executor itself rather than the atom: a fault, named.
+        raise CTFault(f"{type(exc).__name__}: {exc}", cause=exc) from exc
 
 
 def _make_workflow_executor(
@@ -434,11 +450,14 @@ def _execute_cs_step(
             f"CS {cs_fqdn} raised during op {op!r}: {type(exc).__name__}: {exc}",
             cause=exc,
         ) from exc
-    if not isinstance(raw_result, dict):
-        raw_result = {}
-
-    result_status = raw_result.get("result_status", "SUCCESS")
-    return result_status, raw_result
+    # A capability states its outcome. One that states none has not answered, and supplying SUCCESS
+    # for it was a default the declarations never gave (`3c` RT-6).
+    if not isinstance(raw_result, dict) or not raw_result.get("result_status"):
+        raise CSExecutionError(
+            f"CS {cs_fqdn} op {op!r} returned no result_status — a capability that states no "
+            f"outcome has not answered, and none is supplied for it"
+        )
+    return raw_result["result_status"], raw_result
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ CT handler_ref binding is compile-time sealed — no runtime registry.
 
 import unittest
 
-from runtime.ct_executor import CTExecutor, CTExecutionError
+from runtime.ct_executor import CTExecutor, CTFault
 
 
 # ── Minimal atom functions used as handler_ref targets ──────────────
@@ -69,7 +69,7 @@ class TestCTConformance(unittest.TestCase):
         self.assertEqual(result["result"], {"value": "hello_world"})
 
     def test_missing_handler_ref_raises(self):
-        """CTExecutor MUST raise CTExecutionError if handler_ref is absent."""
+        """CTExecutor MUST raise CTFault if handler_ref is absent."""
         ct_ir = self._make_ct_ir([
             {
                 "atom": "test::CT_NO_HANDLER_V0",
@@ -79,11 +79,11 @@ class TestCTConformance(unittest.TestCase):
         ])
 
         executor = CTExecutor()
-        with self.assertRaises(CTExecutionError):
+        with self.assertRaises(CTFault):
             executor.execute(ct_ir=ct_ir, inputs={})
 
     def test_atom_returning_none_raises(self):
-        """CTExecutor MUST raise CTExecutionError if atom returns None."""
+        """CTExecutor MUST raise CTFault if atom returns None."""
         ct_ir = self._make_ct_ir([
             {
                 "atom": "test::CT_NONE_V0",
@@ -94,15 +94,15 @@ class TestCTConformance(unittest.TestCase):
         ])
 
         executor = CTExecutor()
-        with self.assertRaises(CTExecutionError):
+        with self.assertRaises(CTFault):
             executor.execute(ct_ir=ct_ir, inputs={})
 
     def test_missing_atom_stream_raises(self):
-        """CTExecutor MUST raise CTExecutionError if atom_stream is absent."""
+        """CTExecutor MUST raise CTFault if atom_stream is absent."""
         ct_ir = {}
 
         executor = CTExecutor()
-        with self.assertRaises(CTExecutionError):
+        with self.assertRaises(CTFault):
             executor.execute(ct_ir=ct_ir, inputs={})
 
     def test_multi_step_result_chaining(self):

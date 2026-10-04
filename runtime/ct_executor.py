@@ -22,7 +22,31 @@ class CTExecutionError(StructuredError):
         )
 
 
-class CTArtifactNotFound(StructuredError):
+# The name an atom's refusal is raised under. See `_execute_handler_ref`.
+REFUSAL_SIGNAL = "CTExecutionError"
+
+
+class CTFault(StructuredError):
+    """A transform failed in a way its declaration does not answer for.
+
+    Distinct from `CTExecutionError`, which an atom raises to refuse: that is a declared outcome, and
+    the contract routes on it as VIOLATION. A fault is not an outcome at all. The module named by
+    the snapshot did not load, the sealed CT-IR was malformed, or the atom broke instead of
+    answering. Routing on it would be routing on an error class (`3a` §4.1), so execution refuses
+    there instead (`3c` §7).
+    """
+
+    def __init__(self, message: str, cause: Exception | None = None,
+                 error_code: str = "CT_EXECUTION_FAILED"):
+        super().__init__(
+            error_code=error_code,
+            node_category="CT",
+            message=message,
+            cause=cause,
+        )
+
+
+class CTArtifactNotFound(CTFault):
     """The sealed handler_ref names something that is not present.
 
     Distinct from CT_EXECUTION_FAILED: nothing was executed and nothing could be. The snapshot
@@ -30,12 +54,7 @@ class CTArtifactNotFound(StructuredError):
     """
 
     def __init__(self, message: str, cause: Exception | None = None):
-        super().__init__(
-            error_code="CT_ARTIFACT_NOT_FOUND",
-            node_category="CT",
-            message=message,
-            cause=cause,
-        )
+        super().__init__(message, cause=cause, error_code="CT_ARTIFACT_NOT_FOUND")
 
 
 class CTExecutor:
@@ -73,7 +92,7 @@ class CTExecutor:
 
         steps: list[dict] = ct_ir.get("atom_stream")
         if not steps:
-            raise CTExecutionError("CT-IR missing atom_stream")
+            raise CTFault("CT-IR missing atom_stream")
 
         self._run_stream(ctx, steps, "", observer, recorded)
         return ctx._vars
@@ -85,7 +104,7 @@ class CTExecutor:
     def _run_stream(self, ctx, steps, prefix, observer, recorded) -> None:
         for idx, step in enumerate(steps):
             if not step.get("atom"):
-                raise CTExecutionError(f"Missing atom at index {idx}")
+                raise CTFault(f"Missing atom at index {idx}")
             symbol = step.get("out") or step.get("as") or f"#{idx}"
             if "molecule" in step and "loop" in step:
                 self._run_loop_body(ctx, step, f"{prefix}{symbol}", observer, recorded)
@@ -112,10 +131,10 @@ class CTExecutor:
         self._run_stream(child, body.get("atom_stream") or [], prefix, observer, recorded)
         outputs = body.get("outputs") or {}
         if len(outputs) != 1:
-            raise CTExecutionError(f"A molecule emits exactly one value; this one declares {len(outputs)}")
+            raise CTFault(f"A molecule emits exactly one value; this one declares {len(outputs)}")
         (spec,) = outputs.values()
         if not child.has_value(spec["from"]):
-            raise CTExecutionError(f"Molecule emission '{spec['from']}' was not produced")
+            raise CTFault(f"Molecule emission '{spec['from']}' was not produced")
         return child.get_value(spec["from"])
 
     def _run_loop_body(self, ctx, step, path, observer, recorded) -> None:
@@ -165,7 +184,7 @@ class CTExecutor:
         """
         handler_ref = step.get("handler_ref")
         if not handler_ref:
-            raise CTExecutionError(f"CT-IR step missing handler_ref: {step.get('atom')}")
+            raise CTFault(f"CT-IR step missing handler_ref: {step.get('atom')}")
         purity = step.get("purity")
         out_key = step.get("as") or step.get("out")
         if recorded is not None and purity == NONDETERMINISTIC_PURITY:
@@ -179,7 +198,7 @@ class CTExecutor:
         module_path = handler_ref.get("module")
         callable_name = handler_ref.get("callable")
         if not module_path or not callable_name:
-            raise CTExecutionError(f"Incomplete handler_ref on step: {step.get('atom')}")
+            raise CTFault(f"Incomplete handler_ref on step: {step.get('atom')}")
 
         # Importing a sealed handler_ref is a resolution step, and it fails in two ways that mean
         # different things. The module named by the snapshot may be absent — a closure failure. Or
@@ -196,15 +215,15 @@ class CTExecutor:
                     f"{step.get('atom')!r} and it is not importable",
                     cause=exc,
                 ) from exc
-            raise CTExecutionError(
+            raise CTFault(
                 f"handler_ref module {module_path!r} for atom {step.get('atom')!r} requires "
                 f"{missing!r}, which is not installed — the domain's optional dependency is "
                 f"missing, not the transform"
             ) from exc
         except ImportError as exc:
-            raise CTExecutionError(
+            raise CTFault(
                 f"handler_ref module {module_path!r} for atom {step.get('atom')!r} "
-                f"failed to import: {exc}"
+                f"failed to import: {exc}", cause=exc
             ) from exc
 
         try:
@@ -233,16 +252,25 @@ class CTExecutor:
             else:
                 resolved_inputs[key] = value
 
+        # An atom refuses by raising `CTExecutionError`; that is its declared outcome and passes
+        # through. Anything else it raises is a defect, not an answer, and is a fault.
+        #
+        # The refusal is recognised by the class's name, not its identity. Atoms are implementations
+        # outside this package, and most cannot import it: fourteen define their own class of that
+        # name, and the platform's reference transforms raise a vendored one. The name is the
+        # convention every one of them follows, so the name is the signal.
         try:
             result = execute_fn(inputs=resolved_inputs)
-        except CTExecutionError:
+        except (CTExecutionError, CTFault):
             raise
         except Exception as exc:
-            raise CTExecutionError(
-                f"Atom raised exception: {step.get('atom')}: {exc}"
+            if type(exc).__name__ == REFUSAL_SIGNAL:
+                raise CTExecutionError(str(exc)) from exc
+            raise CTFault(
+                f"Atom raised exception: {step.get('atom')}: {type(exc).__name__}: {exc}", cause=exc
             ) from exc
         if result is None:
-            raise CTExecutionError(f"Atom returned None: {step.get('atom')}")
+            raise CTFault(f"Atom returned None: {step.get('atom')}")
         if out_key:
             ctx.set_value(out_key, result)
         self._observe(observer, path, step, purity, result, replayed=False)

@@ -37,6 +37,10 @@ def _offer(inputs):
 
 
 def _choose(inputs):
+    # Refuses, by the refusal signal, when it is given nothing to choose from. Before faults were
+    # told apart from refusals, a TypeError here passed for one.
+    if not inputs.get("done") and inputs.get("candidates") is None:
+        raise CTExecutionError("no candidates to choose from")
     text, done = inputs["text"], inputs["done"]
     if done:
         return {"text": text, "done": True, "blocked": []}
