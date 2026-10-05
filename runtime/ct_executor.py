@@ -152,8 +152,7 @@ class CTExecutor:
             last_result = self._run_molecule(step["molecule"], inputs, f"{path}[{n}]/", observer, recorded)
             for acc_key, result_path in (spec.get("update_accumulator") or {}).items():
                 if isinstance(result_path, str) and result_path.startswith("$.results."):
-                    if isinstance(last_result, dict):
-                        accumulator[acc_key] = last_result.get(result_path[10:])
+                    accumulator[acc_key] = _walk(last_result, result_path[10:].split("."), result_path)
         if step.get("out") and last_result is not None:
             ctx.set_value(step["out"], last_result)
 
@@ -161,17 +160,8 @@ class CTExecutor:
     def _initial_accumulator(ctx, accumulator_spec) -> dict[str, Any]:
         accumulator = {}
         for key, value in accumulator_spec.items():
-            if isinstance(value, str) and value.startswith("$.results."):
-                parts = value[10:].split(".", 1)
-                result = ctx.get_value(parts[0])
-                if len(parts) > 1 and isinstance(result, dict):
-                    for p in parts[1].split("."):
-                        result = result.get(p) if isinstance(result, dict) else None
-                accumulator[key] = result
-            elif isinstance(value, str) and value.startswith("$."):
-                accumulator[key] = ctx.resolve(value)
-            else:
-                accumulator[key] = value
+            accumulator[key] = (ctx.resolve(value)
+                                if isinstance(value, str) and value.startswith("$.") else value)
         return accumulator
 
     def _execute_handler_ref(self, ctx: "_CTContext | _LoopContext", step: dict[str, Any],
@@ -309,25 +299,7 @@ class CTExecutor:
         iterator_name = loop_spec.get("iterator", "item")
 
         # Initialize accumulator
-        accumulator_spec = loop_spec.get("accumulator", {})
-        accumulator = {}
-        for key, value in accumulator_spec.items():
-            if isinstance(value, str) and value.startswith("$."):
-                # Resolve from results namespace
-                if value.startswith("$.results."):
-                    var_path = value[10:]  # Remove $.results.
-                    parts = var_path.split(".", 1)
-                    var_name = parts[0]
-                    remaining = parts[1] if len(parts) > 1 else None
-                    result = ctx.get_value(var_name)
-                    if remaining and isinstance(result, dict):
-                        for p in remaining.split("."):
-                            result = result.get(p) if isinstance(result, dict) else None
-                    accumulator[key] = result
-                else:
-                    accumulator[key] = ctx.resolve(value)
-            else:
-                accumulator[key] = value
+        accumulator = self._initial_accumulator(ctx, loop_spec.get("accumulator", {}))
 
         loop_inputs_spec = loop_spec.get("inputs", {})
         update_spec = loop_spec.get("update_accumulator", {})
@@ -360,9 +332,7 @@ class CTExecutor:
             # Update accumulator from results
             for acc_key, result_path in update_spec.items():
                 if isinstance(result_path, str) and result_path.startswith("$.results."):
-                    field = result_path[10:]  # Remove $.results.
-                    if isinstance(last_result, dict):
-                        accumulator[acc_key] = last_result.get(field)
+                    accumulator[acc_key] = _walk(last_result, result_path[10:].split("."), result_path)
 
         # Store final result
         if out_key and last_result is not None:
@@ -393,43 +363,36 @@ class _LoopContext:
 
     def resolve(self, path: str) -> Any:
         if not path.startswith("$."):
-            return None
-
+            raise CTFault(f"CT-IR path {path!r} is not a path")
         parts = path[2:].split(".")
-        if not parts:
-            return None
-
         root = parts[0]
-
         if root == "accumulator":
-            current = self._accumulator
-        elif root == "iterator":
-            return self._iterator_value
-        elif root == "inputs":
-            current = self._parent._inputs
-        elif root == "results":
-            if len(parts) > 1:
-                var_name = parts[1]
-                if var_name in self._vars:
-                    current = self._vars[var_name]
-                    parts = parts[1:]
-                elif self._parent.has_value(var_name):
-                    current = self._parent.get_value(var_name)
-                    parts = parts[1:]
-                else:
-                    return None
-            else:
-                return None
-        else:
-            return None
+            return _walk(self._accumulator, parts[1:], path)
+        if root == "iterator":
+            return _walk(self._iterator_value, parts[1:], path)
+        if root == "inputs":
+            return _walk(self._parent._inputs, parts[1:], path)
+        if root == "results" and len(parts) > 1:
+            if parts[1] in self._vars:
+                return _walk(self._vars[parts[1]], parts[2:], path)
+            if self._parent.has_value(parts[1]):
+                return _walk(self._parent.get_value(parts[1]), parts[2:], path)
+            raise CTFault(f"CT-IR path {path!r} names a result no step has produced")
+        raise CTFault(f"CT-IR path {path!r} has no root this context resolves")
 
-        for part in parts[1:]:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
 
-        return current
+def _walk(current: Any, parts: list[str], path: str) -> Any:
+    """Follow a path into a value; a path that reaches nothing refuses, never None.
+
+    A value present as null is a value, and is returned. An absent key, or a step into something
+    that is not a mapping, reaches nothing: handing the atom None in its place would supply a
+    default the composition never declared (`3a` RT-6).
+    """
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            raise CTFault(f"CT-IR path {path!r} reaches nothing at {part!r}")
+        current = current[part]
+    return current
 
 
 # ---------------------------------------------------------
@@ -457,35 +420,17 @@ class _CTContext:
         return name in self._vars
 
     def resolve(self, path: str) -> Any:
-        """Resolve a JSONPath-like string (e.g. "$.inputs.foo.bar" or "$.results.var.field")"""
+        """Resolve a JSONPath-like string (e.g. "$.inputs.foo.bar" or "$.results.var.field")."""
         if not path.startswith("$."):
-            return None
-
+            raise CTFault(f"CT-IR path {path!r} is not a path")
         parts = path[2:].split(".")
-        if not parts:
-            return None
-
         root = parts[0]
-
         if root == "inputs":
-            current = self._inputs
-            remaining_parts = parts[1:]
-        elif root == "results":
-            if len(parts) < 2:
-                return None
-            var_name = parts[1]
-            current = self._vars.get(var_name)
-            remaining_parts = parts[2:]
-        elif root in self._vars:
-            current = self._vars[root]
-            remaining_parts = parts[1:]
-        else:
-            return None
-
-        for part in remaining_parts:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-
-        return current
+            return _walk(self._inputs, parts[1:], path)
+        if root == "results" and len(parts) > 1:
+            if parts[1] not in self._vars:
+                raise CTFault(f"CT-IR path {path!r} names a result no step has produced")
+            return _walk(self._vars[parts[1]], parts[2:], path)
+        if root in self._vars:
+            return _walk(self._vars[root], parts[1:], path)
+        raise CTFault(f"CT-IR path {path!r} has no root this context resolves")

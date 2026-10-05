@@ -31,7 +31,7 @@ Output path grammar:
     $.capability_result.<field>    — extract named field from raw step result
 
 on_result actions:
-    "continue"   — proceed to next step (default if status not listed)
+    "continue"   — proceed to next step
     "exit"       — terminate pipeline and return this result_status
 
 Result status:
@@ -82,6 +82,27 @@ class UnlistedStepOutcomeError(RecordedRefusal):
     The step-level counterpart of the scheduler's `UnroutedOutcomeError`. A missing continuation is
     not a default: execution refuses there, and never proceeds past it.
     """
+
+
+class BindingFault(StructuredError):
+    """A binding reached nothing it may stand in for (`3c` RT-6).
+
+    A malformed path, a step that has not run, or a field a successful result does not carry. None
+    is not supplied in its place: a value the declarations never gave is a default.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(error_code="CT_EXECUTION_FAILED", node_category="CC", message=message)
+
+
+def _refuse_binding(writer: TraceWriter, cc_addr: int, cc_fqdn: str, step_id: str,
+                    exc: BindingFault) -> None:
+    writer.error("capability fault", node=cc_addr, step=step_id, refusal=exc.error_code,
+                 reason=str(exc))
+    raise CapabilityFaultError(
+        f"step {step_id!r} of {cc_fqdn}: {exc} — execution refuses rather than supply a value "
+        f"the declarations never gave (3c RT-6)."
+    ) from exc
 
 
 class CSExecutionError(StructuredError):
@@ -159,7 +180,10 @@ def execute_cc(
         step_id:     str        = step.get("step_id") or step.get("step") or ""
 
         # Resolve step inputs from CC inputs and accumulated step results
-        resolved_inputs = _resolve_step_inputs(inputs_spec, cc_inputs, step_results)
+        try:
+            resolved_inputs = _resolve_step_inputs(inputs_spec, cc_inputs, step_results)
+        except BindingFault as exc:
+            _refuse_binding(writer, cc_addr, cc_fqdn, step_id, exc)
 
         # --- Execute step ---
         # A fault is recorded and refused here, at the step, rather than routed: it is not an
@@ -184,7 +208,10 @@ def execute_cc(
             ) from exc
 
         # Apply outputs mapping: {cc_field: "$.capability_result.<ct_field>"} → surface fragment
-        surface_fragment = _apply_outputs(outputs_spec, raw_result, step_results)
+        try:
+            surface_fragment = _apply_outputs(outputs_spec, raw_result, step_results, result_status)
+        except BindingFault as exc:
+            _refuse_binding(writer, cc_addr, cc_fqdn, step_id, exc)
 
         # Store surface fragment + raw capability_result for cross-step references.
         # $.results.<step_id>.<field>              — addresses the mapped surface
@@ -474,10 +501,11 @@ def _resolve_step_inputs(
         $.inputs.<field>               → cc_inputs[field]
         $.results.<step_id>.<field>    → step_results[step_id][field]
         <other>                        → literal (returned as-is)
+
+    A source that is absent is left out, never set to None; a value present as null is passed. The
+    capability then sees exactly what was given, and refuses on its own declaration if it needs it.
     """
-    resolved: dict[str, Any] = {}
-    for key, value in inputs_spec.items():
-        resolved[key] = _resolve_value(value, cc_inputs, step_results)
+    resolved = _resolve_value(inputs_spec, cc_inputs, step_results)
     return resolved
 
 
@@ -486,43 +514,62 @@ def _resolve_value(
     cc_inputs: dict[str, Any],
     step_results: dict[str, dict[str, Any]],
 ) -> Any:
-    """Resolve a single binding value — recursively handles nested dicts/lists."""
+    """Resolve a single binding value — recursively handles nested dicts/lists.
+
+    Returns `ABSENT` for a path whose source is absent. A mapping leaves such a key out; a list
+    cannot, because leaving a member out moves every member after it, so it refuses.
+    """
     if isinstance(value, str):
         if value.startswith("$.inputs."):
-            field = value[len("$.inputs."):]
-            return _nested_get(cc_inputs, field)
+            return _nested_get(cc_inputs, value[len("$.inputs."):])
 
         if value.startswith("$.results."):
-            # $.results.<step_id>.<field>[.<nested>...]
-            after = value[len("$.results."):]
-            dot = after.find(".")
-            if dot < 0:
-                return None  # malformed path
-            step_id = after[:dot]
-            field_path = after[dot + 1:]
-            step_surface = step_results.get(step_id, {})
-            return _nested_get(step_surface, field_path)
+            step_id, field_path = _split_results_path(value)
+            if step_id not in step_results:
+                raise BindingFault(f"{value!r} names step {step_id!r}, which has not run")
+            return _nested_get(step_results[step_id], field_path)
 
         # Literal string value
         return value
 
     if isinstance(value, dict):
-        return {k: _resolve_value(v, cc_inputs, step_results) for k, v in value.items()}
+        resolved = {k: _resolve_value(v, cc_inputs, step_results) for k, v in value.items()}
+        return {k: v for k, v in resolved.items() if v is not ABSENT}
 
     if isinstance(value, (list, tuple)):
-        return [_resolve_value(v, cc_inputs, step_results) for v in value]
+        resolved = [_resolve_value(v, cc_inputs, step_results) for v in value]
+        if any(v is ABSENT for v in resolved):
+            raise BindingFault(f"a list binding {list(value)!r} names a source that is absent")
+        return resolved
 
     return value  # int, float, bool, None — returned as-is
 
 
+class _Absent:
+    """A source that is not there. Distinct from None, which is a value present as null."""
+
+    def __repr__(self) -> str:
+        return "ABSENT"
+
+
+ABSENT: Any = _Absent()
+
+
+def _split_results_path(path: str) -> tuple[str, str]:
+    """`$.results.<step_id>.<field>[.<nested>...]` → (step_id, field path); malformed refuses."""
+    step_id, dot, field_path = path[len("$.results."):].partition(".")
+    if not step_id or not dot or not field_path:
+        raise BindingFault(f"{path!r} is not a path of the form $.results.<step>.<field>")
+    return step_id, field_path
+
+
 def _nested_get(obj: Any, dotted_key: str) -> Any:
-    """Traverse a nested dict by a dot-separated key path. Returns None on miss."""
-    parts = dotted_key.split(".")
+    """Traverse a nested dict by a dot-separated key path. Returns `ABSENT` on miss."""
     current = obj
-    for part in parts:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return ABSENT
+        current = current[part]
     return current
 
 
@@ -534,43 +581,46 @@ def _apply_outputs(
     outputs_spec: dict[str, str],
     raw_result: dict[str, Any],
     step_results: dict[str, dict[str, Any]],
+    result_status: str,
 ) -> dict[str, Any]:
     """
     Apply the compiler-emitted outputs mapping to the raw step result.
 
     Supported path prefixes:
+        $.result_status                    — the outcome this step ended with
         $.capability_result.<field>        — field from this step's raw result
+        $.<field>                          — the same, written bare
         $.results.<step_id>.<field>        — field from a prior step's surface fragment
+
+    A result is mapped only when the step succeeded, and then every field mapped from it must be
+    there: a successful result missing a field it declares is a fault, not a null. Any other outcome
+    maps nothing from the result — what it carries is a refusal, not the fields a success declares —
+    and the raw result stays addressable under `capability_result`. A prior step's field that is
+    absent is left out, as an input is.
 
     Unmapped fields from raw_result are NOT included — surface is compiler-declared.
     """
-    if not outputs_spec:
-        return {}
-
     fragment: dict[str, Any] = {}
-    for surface_field, path in outputs_spec.items():
-        if not isinstance(path, str):
-            fragment[surface_field] = path
-        elif path.startswith("$.capability_result."):
-            result_field = path[len("$.capability_result."):]
-            fragment[surface_field] = _nested_get(raw_result, result_field)
+    for surface_field, path in (outputs_spec or {}).items():
+        if not isinstance(path, str) or not path.startswith("$."):
+            fragment[surface_field] = path  # literal
+        elif path == "$.result_status":
+            fragment[surface_field] = result_status
         elif path.startswith("$.results."):
-            after = path[len("$.results."):]
-            dot = after.find(".")
-            if dot < 0:
-                fragment[surface_field] = None
-            else:
-                step_id = after[:dot]
-                field_path = after[dot + 1:]
-                step_surface = step_results.get(step_id, {})
-                fragment[surface_field] = _nested_get(step_surface, field_path)
-        elif path.startswith("$."):
-            # Bare $.field path — direct reference into the raw step result
-            field_path = path[len("$."):]
-            fragment[surface_field] = _nested_get(raw_result, field_path)
-        else:
-            # Literal value — returned as-is
-            fragment[surface_field] = path
+            step_id, field_path = _split_results_path(path)
+            if step_id not in step_results:
+                raise BindingFault(f"{path!r} names step {step_id!r}, which has not run")
+            found = _nested_get(step_results[step_id], field_path)
+            if found is not ABSENT:
+                fragment[surface_field] = found
+        elif result_status == "SUCCESS":
+            field = path[len("$.capability_result."):] if path.startswith(
+                "$.capability_result.") else path[len("$."):]
+            found = _nested_get(raw_result, field)
+            if found is ABSENT:
+                raise BindingFault(f"the result maps {path!r} to {surface_field!r} and carries no "
+                                   f"{field!r}")
+            fragment[surface_field] = found
 
     return fragment
 

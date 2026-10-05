@@ -44,7 +44,7 @@ from typing import Any
 from runtime.dispatcher import CapabilityFaultError, UnlistedStepOutcomeError, execute_cc
 from runtime.evidence import RecordedRefusal, TraceWriter
 from runtime.loader import RuntimePackage
-from runtime.memory import ExecutionContext
+from runtime.memory import ExecutionContext, MalformedBindingError
 
 # Guard against pathological graphs (cycles, runaway traversal)
 _MAX_HOPS = 64
@@ -155,7 +155,16 @@ def run_wf(
                 .get(wf_addr, {})
                 .get(current_node_key, {})
             )
-            cc_inputs = ctx.resolve_inputs(wf_bindings)
+            try:
+                cc_inputs = ctx.resolve_inputs(wf_bindings)
+            except MalformedBindingError as exc:
+                writer.error("capability fault", node=current_addr, refusal="CT_EXECUTION_FAILED",
+                             reason=str(exc))
+                writer.wf_complete("VIOLATION")
+                raise CapabilityFaultError(
+                    f"{wf_fqdn} binds {current_node_key!r}: {exc} — execution refuses rather than "
+                    f"supply a value the declarations never gave (3c RT-6)."
+                ) from exc
 
             # A contract refuses at a step and records why; the workflow it belongs to ends refused,
             # and completing the workflow is the scheduler's to record, not the dispatcher's.
