@@ -33,6 +33,7 @@ Output path grammar:
 on_result actions:
     "continue"   — proceed to next step
     "exit"       — terminate pipeline and return this result_status
+    anything else refuses the run (`UnknownContinuationError`)
 
 Result status:
     CT steps:  "SUCCESS" on completion, "VIOLATION" when the atom refuses; a fault refuses the run
@@ -103,6 +104,16 @@ def _refuse_binding(writer: TraceWriter, cc_addr: int, cc_fqdn: str, step_id: st
         f"step {step_id!r} of {cc_fqdn}: {exc} — execution refuses rather than supply a value "
         f"the declarations never gave (3c RT-6)."
     ) from exc
+
+
+class UnknownContinuationError(UnlistedStepOutcomeError):
+    """A composed step routes an outcome to something other than continue or exit.
+
+    Routing is a lookup with two answers. Any other answer — an evaluation target, once admitted by
+    the build — was read as going on, so a contract routing to a condition ended with its last
+    step's outcome whatever the condition said. The build refuses such a contract; execution refuses
+    too, rather than proceed past an answer it cannot perform.
+    """
 
 
 class CSExecutionError(StructuredError):
@@ -246,6 +257,16 @@ def execute_cc(
             raise UnlistedStepOutcomeError(
                 f"step {step_id!r} of {cc_fqdn} ended with {result_status!r}, for which the "
                 f"contract declares no continuation — execution refuses rather than proceed (3a EX-18)."
+            )
+        if action not in ("continue", "exit"):
+            writer.error(
+                "unknown continuation",
+                node=cc_addr, step=step_id, outcome=result_status, continuation=action,
+            )
+            raise UnknownContinuationError(
+                f"step {step_id!r} of {cc_fqdn} routes {result_status!r} to {action!r}; a "
+                f"continuation is continue or exit, and execution refuses rather than read anything "
+                f"else as going on (execution_topology::INVARIANT_TOPOLOGY_CONTRACT_CLOSED_V1)."
             )
         if action == "exit":
             break

@@ -127,6 +127,30 @@ class ReferenceCollatzTest(unittest.TestCase):
         payload = next(e["detail"]["payload"] for e in events if e.get("event_type") == "EVENT")
         self.assertTrue(payload["all_terminate"])
 
+    def test_a_sequence_that_does_not_end_at_one_violates_the_conjecture(self):
+        # The gate routed SUCCESS to a condition nothing ran, so it could not fail (cr_01). It now
+        # decides with the platform's set-membership check. No computed sequence fails to end at 1,
+        # so the check is made to report one that did; the run must end violated, store nothing,
+        # and announce the numbers that did not terminate.
+        import importlib
+        from unittest import mock
+        check = importlib.import_module(
+            "workloads.collatz.implementation.capability_transforms.atoms.ct_pure_termination_check_v0")
+        found = {"all_terminate": False, "non_terminating": ["7"]}
+        with mock.patch.object(check, "execute", lambda inputs, context=None: found):
+            r = self._run([6, 7])
+        self.assertEqual(r.status, "VIOLATION")
+        self.assertFalse((self.instance / "workload" / "collatz" / "collatz_results.json").exists())
+        events = [json.loads(line)
+                  for line in (r.trace_dir / f"{r.trace_id}.jsonl").read_text().splitlines()]
+        steps = [e["detail"] for e in events if e.get("event_type") == "CC_STEP"]
+        self.assertEqual([s.get("outcome") for s in steps][-2:], ["SUCCESS", "VIOLATION"], steps)
+        self.assertEqual(r.surface["non_terminating"], ["7"])
+        payload = next(e["detail"]["payload"] for e in events if e.get("event_type") == "EVENT")
+        self.assertEqual(payload["non_terminating"], ["7"])
+        routes = [e["detail"].get("to_node") for e in events if e.get("event_type") == "WF_ROUTE"]
+        self.assertEqual(routes[-1], "EXIT_CONJECTURE_VIOLATED", routes)
+
 
 if __name__ == "__main__":
     unittest.main()
