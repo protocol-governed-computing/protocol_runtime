@@ -57,7 +57,7 @@ the data root:
 
 ```
 <data-root>/traces/<domain>/<WF>/<TRACE_ID>/
-    <TRACE_ID>.jsonl    append-only execution log, one SCHEMA_TRACE_EVENT_V1 event per line
+    <TRACE_ID>.jsonl    append-only execution log, one SCHEMA_TRACE_EVENT_V2 event per line
     <TRACE_ID>.png      the path the run took, drawn only on request (`run --behavior-logic`,
                         or `behavior-logic <trace>`)
 

@@ -91,7 +91,9 @@ GOOD = [
     _case(WRITE, "finishes_at_three", _sealed_write(),
           {"positions": POSITIONS, "forbidden": "x", "seed": 1},
           expected={"response": FINISHED}, recorded=_recorded()),
-    _case(CHOOSE, "refuses_without_inputs", _choose_ir(), {}, outcome="VIOLATION"),
+    _case(CHOOSE, "refuses_without_candidates", _choose_ir(),
+          {"text": "", "done": False, "candidates": None, "forbidden": "x", "seed": 1, "position": 1},
+          outcome="VIOLATION"),
 ]
 
 
@@ -109,6 +111,16 @@ class RunnerTest(unittest.TestCase):
         result, _ = self._run(GOOD)
         self.assertEqual(result.proven, [CHOOSE, WRITE], [c for c in result.cases if not c.passed])
         self.assertEqual(CALLS["offer"], 0)
+
+    def test_a_case_whose_inputs_are_absent_fails_as_a_fault_never_as_the_atoms_refusal(self):
+        # A path that reaches nothing used to hand the atom None, and the atom's refusal of None then
+        # passed a VIOLATION case. The runtime now refuses there; that is a fault, which fails any case.
+        absent = _case(CHOOSE, "refuses_without_inputs", _choose_ir(), {}, outcome="VIOLATION")
+        result, _ = self._run([GOOD[0], absent])
+        failed = [c for c in result.cases if not c.passed]
+        self.assertEqual(len(failed), 1, result.cases)
+        self.assertIn("fault, not a refusal", failed[0].error)
+        self.assertIn("reaches nothing", failed[0].error)
 
     def test_an_untested_transform_is_named_unproven_and_a_carried_one_is_named_carried(self):
         result, written = self._run(GOOD)

@@ -22,7 +22,31 @@ class CTExecutionError(StructuredError):
         )
 
 
-class CTArtifactNotFound(StructuredError):
+# The name an atom's refusal is raised under. See `_execute_handler_ref`.
+REFUSAL_SIGNAL = "CTExecutionError"
+
+
+class CTFault(StructuredError):
+    """A transform failed in a way its declaration does not answer for.
+
+    Distinct from `CTExecutionError`, which an atom raises to refuse: that is a declared outcome, and
+    the contract routes on it as VIOLATION. A fault is not an outcome at all. The module named by
+    the snapshot did not load, the sealed CT-IR was malformed, or the atom broke instead of
+    answering. Routing on it would be routing on an error class (`3a` §4.1), so execution refuses
+    there instead (`3c` §7).
+    """
+
+    def __init__(self, message: str, cause: Exception | None = None,
+                 error_code: str = "CT_EXECUTION_FAILED"):
+        super().__init__(
+            error_code=error_code,
+            node_category="CT",
+            message=message,
+            cause=cause,
+        )
+
+
+class CTArtifactNotFound(CTFault):
     """The sealed handler_ref names something that is not present.
 
     Distinct from CT_EXECUTION_FAILED: nothing was executed and nothing could be. The snapshot
@@ -30,12 +54,7 @@ class CTArtifactNotFound(StructuredError):
     """
 
     def __init__(self, message: str, cause: Exception | None = None):
-        super().__init__(
-            error_code="CT_ARTIFACT_NOT_FOUND",
-            node_category="CT",
-            message=message,
-            cause=cause,
-        )
+        super().__init__(message, cause=cause, error_code="CT_ARTIFACT_NOT_FOUND")
 
 
 class CTExecutor:
@@ -73,7 +92,7 @@ class CTExecutor:
 
         steps: list[dict] = ct_ir.get("atom_stream")
         if not steps:
-            raise CTExecutionError("CT-IR missing atom_stream")
+            raise CTFault("CT-IR missing atom_stream")
 
         self._run_stream(ctx, steps, "", observer, recorded)
         return ctx._vars
@@ -85,7 +104,7 @@ class CTExecutor:
     def _run_stream(self, ctx, steps, prefix, observer, recorded) -> None:
         for idx, step in enumerate(steps):
             if not step.get("atom"):
-                raise CTExecutionError(f"Missing atom at index {idx}")
+                raise CTFault(f"Missing atom at index {idx}")
             symbol = step.get("out") or step.get("as") or f"#{idx}"
             if "molecule" in step and "loop" in step:
                 self._run_loop_body(ctx, step, f"{prefix}{symbol}", observer, recorded)
@@ -112,10 +131,10 @@ class CTExecutor:
         self._run_stream(child, body.get("atom_stream") or [], prefix, observer, recorded)
         outputs = body.get("outputs") or {}
         if len(outputs) != 1:
-            raise CTExecutionError(f"A molecule emits exactly one value; this one declares {len(outputs)}")
+            raise CTFault(f"A molecule emits exactly one value; this one declares {len(outputs)}")
         (spec,) = outputs.values()
         if not child.has_value(spec["from"]):
-            raise CTExecutionError(f"Molecule emission '{spec['from']}' was not produced")
+            raise CTFault(f"Molecule emission '{spec['from']}' was not produced")
         return child.get_value(spec["from"])
 
     def _run_loop_body(self, ctx, step, path, observer, recorded) -> None:
@@ -133,8 +152,7 @@ class CTExecutor:
             last_result = self._run_molecule(step["molecule"], inputs, f"{path}[{n}]/", observer, recorded)
             for acc_key, result_path in (spec.get("update_accumulator") or {}).items():
                 if isinstance(result_path, str) and result_path.startswith("$.results."):
-                    if isinstance(last_result, dict):
-                        accumulator[acc_key] = last_result.get(result_path[10:])
+                    accumulator[acc_key] = _walk(last_result, result_path[10:].split("."), result_path)
         if step.get("out") and last_result is not None:
             ctx.set_value(step["out"], last_result)
 
@@ -142,17 +160,8 @@ class CTExecutor:
     def _initial_accumulator(ctx, accumulator_spec) -> dict[str, Any]:
         accumulator = {}
         for key, value in accumulator_spec.items():
-            if isinstance(value, str) and value.startswith("$.results."):
-                parts = value[10:].split(".", 1)
-                result = ctx.get_value(parts[0])
-                if len(parts) > 1 and isinstance(result, dict):
-                    for p in parts[1].split("."):
-                        result = result.get(p) if isinstance(result, dict) else None
-                accumulator[key] = result
-            elif isinstance(value, str) and value.startswith("$."):
-                accumulator[key] = ctx.resolve(value)
-            else:
-                accumulator[key] = value
+            accumulator[key] = (ctx.resolve(value)
+                                if isinstance(value, str) and value.startswith("$.") else value)
         return accumulator
 
     def _execute_handler_ref(self, ctx: "_CTContext | _LoopContext", step: dict[str, Any],
@@ -165,7 +174,7 @@ class CTExecutor:
         """
         handler_ref = step.get("handler_ref")
         if not handler_ref:
-            raise CTExecutionError(f"CT-IR step missing handler_ref: {step.get('atom')}")
+            raise CTFault(f"CT-IR step missing handler_ref: {step.get('atom')}")
         purity = step.get("purity")
         out_key = step.get("as") or step.get("out")
         if recorded is not None and purity == NONDETERMINISTIC_PURITY:
@@ -179,7 +188,7 @@ class CTExecutor:
         module_path = handler_ref.get("module")
         callable_name = handler_ref.get("callable")
         if not module_path or not callable_name:
-            raise CTExecutionError(f"Incomplete handler_ref on step: {step.get('atom')}")
+            raise CTFault(f"Incomplete handler_ref on step: {step.get('atom')}")
 
         # Importing a sealed handler_ref is a resolution step, and it fails in two ways that mean
         # different things. The module named by the snapshot may be absent — a closure failure. Or
@@ -196,15 +205,15 @@ class CTExecutor:
                     f"{step.get('atom')!r} and it is not importable",
                     cause=exc,
                 ) from exc
-            raise CTExecutionError(
+            raise CTFault(
                 f"handler_ref module {module_path!r} for atom {step.get('atom')!r} requires "
                 f"{missing!r}, which is not installed — the domain's optional dependency is "
                 f"missing, not the transform"
             ) from exc
         except ImportError as exc:
-            raise CTExecutionError(
+            raise CTFault(
                 f"handler_ref module {module_path!r} for atom {step.get('atom')!r} "
-                f"failed to import: {exc}"
+                f"failed to import: {exc}", cause=exc
             ) from exc
 
         try:
@@ -233,16 +242,25 @@ class CTExecutor:
             else:
                 resolved_inputs[key] = value
 
+        # An atom refuses by raising `CTExecutionError`; that is its declared outcome and passes
+        # through. Anything else it raises is a defect, not an answer, and is a fault.
+        #
+        # The refusal is recognised by the class's name, not its identity. Atoms are implementations
+        # outside this package, and most cannot import it: fourteen define their own class of that
+        # name, and the platform's reference transforms raise a vendored one. The name is the
+        # convention every one of them follows, so the name is the signal.
         try:
             result = execute_fn(inputs=resolved_inputs)
-        except CTExecutionError:
+        except (CTExecutionError, CTFault):
             raise
         except Exception as exc:
-            raise CTExecutionError(
-                f"Atom raised exception: {step.get('atom')}: {exc}"
+            if type(exc).__name__ == REFUSAL_SIGNAL:
+                raise CTExecutionError(str(exc)) from exc
+            raise CTFault(
+                f"Atom raised exception: {step.get('atom')}: {type(exc).__name__}: {exc}", cause=exc
             ) from exc
         if result is None:
-            raise CTExecutionError(f"Atom returned None: {step.get('atom')}")
+            raise CTFault(f"Atom returned None: {step.get('atom')}")
         if out_key:
             ctx.set_value(out_key, result)
         self._observe(observer, path, step, purity, result, replayed=False)
@@ -281,25 +299,7 @@ class CTExecutor:
         iterator_name = loop_spec.get("iterator", "item")
 
         # Initialize accumulator
-        accumulator_spec = loop_spec.get("accumulator", {})
-        accumulator = {}
-        for key, value in accumulator_spec.items():
-            if isinstance(value, str) and value.startswith("$."):
-                # Resolve from results namespace
-                if value.startswith("$.results."):
-                    var_path = value[10:]  # Remove $.results.
-                    parts = var_path.split(".", 1)
-                    var_name = parts[0]
-                    remaining = parts[1] if len(parts) > 1 else None
-                    result = ctx.get_value(var_name)
-                    if remaining and isinstance(result, dict):
-                        for p in remaining.split("."):
-                            result = result.get(p) if isinstance(result, dict) else None
-                    accumulator[key] = result
-                else:
-                    accumulator[key] = ctx.resolve(value)
-            else:
-                accumulator[key] = value
+        accumulator = self._initial_accumulator(ctx, loop_spec.get("accumulator", {}))
 
         loop_inputs_spec = loop_spec.get("inputs", {})
         update_spec = loop_spec.get("update_accumulator", {})
@@ -332,9 +332,7 @@ class CTExecutor:
             # Update accumulator from results
             for acc_key, result_path in update_spec.items():
                 if isinstance(result_path, str) and result_path.startswith("$.results."):
-                    field = result_path[10:]  # Remove $.results.
-                    if isinstance(last_result, dict):
-                        accumulator[acc_key] = last_result.get(field)
+                    accumulator[acc_key] = _walk(last_result, result_path[10:].split("."), result_path)
 
         # Store final result
         if out_key and last_result is not None:
@@ -365,43 +363,36 @@ class _LoopContext:
 
     def resolve(self, path: str) -> Any:
         if not path.startswith("$."):
-            return None
-
+            raise CTFault(f"CT-IR path {path!r} is not a path")
         parts = path[2:].split(".")
-        if not parts:
-            return None
-
         root = parts[0]
-
         if root == "accumulator":
-            current = self._accumulator
-        elif root == "iterator":
-            return self._iterator_value
-        elif root == "inputs":
-            current = self._parent._inputs
-        elif root == "results":
-            if len(parts) > 1:
-                var_name = parts[1]
-                if var_name in self._vars:
-                    current = self._vars[var_name]
-                    parts = parts[1:]
-                elif self._parent.has_value(var_name):
-                    current = self._parent.get_value(var_name)
-                    parts = parts[1:]
-                else:
-                    return None
-            else:
-                return None
-        else:
-            return None
+            return _walk(self._accumulator, parts[1:], path)
+        if root == "iterator":
+            return _walk(self._iterator_value, parts[1:], path)
+        if root == "inputs":
+            return _walk(self._parent._inputs, parts[1:], path)
+        if root == "results" and len(parts) > 1:
+            if parts[1] in self._vars:
+                return _walk(self._vars[parts[1]], parts[2:], path)
+            if self._parent.has_value(parts[1]):
+                return _walk(self._parent.get_value(parts[1]), parts[2:], path)
+            raise CTFault(f"CT-IR path {path!r} names a result no step has produced")
+        raise CTFault(f"CT-IR path {path!r} has no root this context resolves")
 
-        for part in parts[1:]:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
 
-        return current
+def _walk(current: Any, parts: list[str], path: str) -> Any:
+    """Follow a path into a value; a path that reaches nothing refuses, never None.
+
+    A value present as null is a value, and is returned. An absent key, or a step into something
+    that is not a mapping, reaches nothing: handing the atom None in its place would supply a
+    default the composition never declared (`3a` RT-6).
+    """
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            raise CTFault(f"CT-IR path {path!r} reaches nothing at {part!r}")
+        current = current[part]
+    return current
 
 
 # ---------------------------------------------------------
@@ -429,35 +420,17 @@ class _CTContext:
         return name in self._vars
 
     def resolve(self, path: str) -> Any:
-        """Resolve a JSONPath-like string (e.g. "$.inputs.foo.bar" or "$.results.var.field")"""
+        """Resolve a JSONPath-like string (e.g. "$.inputs.foo.bar" or "$.results.var.field")."""
         if not path.startswith("$."):
-            return None
-
+            raise CTFault(f"CT-IR path {path!r} is not a path")
         parts = path[2:].split(".")
-        if not parts:
-            return None
-
         root = parts[0]
-
         if root == "inputs":
-            current = self._inputs
-            remaining_parts = parts[1:]
-        elif root == "results":
-            if len(parts) < 2:
-                return None
-            var_name = parts[1]
-            current = self._vars.get(var_name)
-            remaining_parts = parts[2:]
-        elif root in self._vars:
-            current = self._vars[root]
-            remaining_parts = parts[1:]
-        else:
-            return None
-
-        for part in remaining_parts:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-
-        return current
+            return _walk(self._inputs, parts[1:], path)
+        if root == "results" and len(parts) > 1:
+            if parts[1] not in self._vars:
+                raise CTFault(f"CT-IR path {path!r} names a result no step has produced")
+            return _walk(self._vars[parts[1]], parts[2:], path)
+        if root in self._vars:
+            return _walk(self._vars[root], parts[1:], path)
+        raise CTFault(f"CT-IR path {path!r} has no root this context resolves")

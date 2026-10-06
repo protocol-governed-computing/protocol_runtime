@@ -6,8 +6,7 @@ Adapter between the dispatcher and CTExecutor.
 
 from typing import Any
 
-from runtime.ct_errors import StructuredError
-from runtime.ct_executor import CTExecutor
+from runtime.ct_executor import CTExecutor, CTFault
 
 # Module-level executor singleton — avoids re-creating per call,
 # preserves federated IR directory cache and atom loading.
@@ -48,11 +47,7 @@ def execute_ct(ct_ir: dict[str, Any], inputs: dict[str, Any], observer=None, rec
     # ---- Output adaptation ----
     outputs = ct_ir.get("outputs")
     if not outputs:
-        raise StructuredError(
-            error_code="CT_EXECUTION_FAILED",
-            node_category="CT",
-            message="CT must declare at least one output",
-        )
+        raise CTFault("CT must declare at least one output")
 
     # Build CT outputs by mapping from symbol table
     ct_outputs = {}
@@ -60,11 +55,7 @@ def execute_ct(ct_ir: dict[str, Any], inputs: dict[str, Any], observer=None, rec
         from_symbol = spec["from"]
 
         if from_symbol not in symbol_table:
-            raise StructuredError(
-                error_code="CT_EXECUTION_FAILED",
-                node_category="CT",
-                message=f"CT output symbol '{from_symbol}' was not produced by CT execution",
-            )
+            raise CTFault(f"CT output symbol '{from_symbol}' was not produced by CT execution")
 
         symbol_value = symbol_table[from_symbol]
 

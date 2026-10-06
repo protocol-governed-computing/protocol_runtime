@@ -153,7 +153,7 @@ reconstructed afterwards.
 | `EVENT` | a declared domain moment was announced |
 | `ERROR` | a structural failure ended the traversal |
 
-Every line conforms to `SCHEMA_TRACE_EVENT_V1`, and the regression checks every trace a run writes
+Every line conforms to `SCHEMA_TRACE_EVENT_V2` (V1 is the schema of traces written under v5), and the regression checks every trace a run writes
 against it.
 
 The trace exists to make a claim checkable. *"This ran and conformed"* is an assertion; the trace is

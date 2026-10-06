@@ -3,7 +3,7 @@ Test Suite 3: Failure Mode Tests
 
 Tests that runtime fails fast and explicitly on errors.
 v0.3.0: failure modes are surfaced via load_domain (FileNotFoundError,
-RuntimeError), ct_executor (CTExecutionError), and dispatcher internals.
+RuntimeError), ct_executor (CTFault), and dispatcher internals.
 """
 
 import json
@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from runtime.loader import load_domain
-from runtime.ct_executor import CTExecutor, CTExecutionError
+from runtime.ct_executor import CTExecutor, CTFault
 
 
 def _failing_atom(inputs: dict) -> dict:
@@ -109,13 +109,13 @@ class TestFailureModes(unittest.TestCase):
     # ── CT executor failure modes ─────────────────────────────────────────
 
     def test_ct_executor_fails_on_missing_atom_stream(self):
-        """CTExecutor MUST raise CTExecutionError if atom_stream is absent."""
+        """CTExecutor MUST raise CTFault if atom_stream is absent."""
         executor = CTExecutor()
-        with self.assertRaises(CTExecutionError):
+        with self.assertRaises(CTFault):
             executor.execute(ct_ir={}, inputs={})
 
     def test_ct_executor_fails_on_missing_handler_ref(self):
-        """CTExecutor MUST raise CTExecutionError if handler_ref is absent."""
+        """CTExecutor MUST raise CTFault if handler_ref is absent."""
         ct_ir = {
             "atom_stream": [
                 {
@@ -127,11 +127,11 @@ class TestFailureModes(unittest.TestCase):
             ]
         }
         executor = CTExecutor()
-        with self.assertRaises(CTExecutionError):
+        with self.assertRaises(CTFault):
             executor.execute(ct_ir=ct_ir, inputs={})
 
     def test_ct_executor_fails_when_atom_raises(self):
-        """CTExecutor MUST raise CTExecutionError if the atom function raises."""
+        """CTExecutor MUST raise CTFault if the atom function raises."""
         _THIS_MODULE = "testbed.implementations.tests.test_failure_modes"
 
         ct_ir = {
@@ -148,7 +148,7 @@ class TestFailureModes(unittest.TestCase):
             ]
         }
         executor = CTExecutor()
-        with self.assertRaises(CTExecutionError):
+        with self.assertRaises(CTFault):
             executor.execute(ct_ir=ct_ir, inputs={})
 
     # ── Snapshot load success path ────────────────────────────────────────

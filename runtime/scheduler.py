@@ -41,10 +41,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from runtime.dispatcher import execute_cc
-from runtime.evidence import TraceWriter
+from runtime.dispatcher import CapabilityFaultError, UnlistedStepOutcomeError, execute_cc
+from runtime.evidence import RecordedRefusal, TraceWriter
 from runtime.loader import RuntimePackage
-from runtime.memory import ExecutionContext
+from runtime.memory import ExecutionContext, MalformedBindingError
 
 # Guard against pathological graphs (cycles, runaway traversal)
 _MAX_HOPS = 64
@@ -84,7 +84,7 @@ def _admit(payload: dict, contract: dict) -> tuple[str, list[dict[str, Any]]]:
     return ("ACK" if all(c["held"] for c in checks) else "NACK"), checks
 
 
-class UnroutedOutcomeError(RuntimeError):
+class UnroutedOutcomeError(RecordedRefusal):
     """An outcome with neither declared routing nor a declared ending (EX-5, RT-9)."""
 
 
@@ -155,12 +155,27 @@ def run_wf(
                 .get(wf_addr, {})
                 .get(current_node_key, {})
             )
-            cc_inputs = ctx.resolve_inputs(wf_bindings)
+            try:
+                cc_inputs = ctx.resolve_inputs(wf_bindings)
+            except MalformedBindingError as exc:
+                writer.error("capability fault", node=current_addr, refusal="CT_EXECUTION_FAILED",
+                             reason=str(exc))
+                writer.wf_complete("VIOLATION")
+                raise CapabilityFaultError(
+                    f"{wf_fqdn} binds {current_node_key!r}: {exc} — execution refuses rather than "
+                    f"supply a value the declarations never gave (3c RT-6)."
+                ) from exc
 
-            result_status, surface = execute_cc(
-                current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr,
-                node_key=current_node_key,
-            )
+            # A contract refuses at a step and records why; the workflow it belongs to ends refused,
+            # and completing the workflow is the scheduler's to record, not the dispatcher's.
+            try:
+                result_status, surface = execute_cc(
+                    current_addr, rb_addr, cc_inputs, pkg, writer, data_root, wf_addr,
+                    node_key=current_node_key,
+                )
+            except (UnlistedStepOutcomeError, CapabilityFaultError):
+                writer.wf_complete("VIOLATION")
+                raise
             ctx.record_result(current_addr, surface)
 
             # Observation: a CC outcome that routes to an announcing exit states the moments that
@@ -199,8 +214,11 @@ def run_wf(
                     f"to determine admission against, and absence is not permission (1c AI-6)."
                 )
             result_status, checks = _admit(payload, contract)
+            # An admission's continuation is the workflow's route, recorded by the WF_ROUTE that
+            # follows; `route` says so rather than repeating it.
             writer.cc_step(current_addr, current_addr, pkg.vocab.fqdn(current_addr),
-                           "ADMIT", {"outcome": result_status}, checks=checks)
+                           "ADMIT", {"outcome": result_status}, checks=checks,
+                           outcome=result_status, continuation="route")
 
         # Resolve result_status → condition address and route to next node.
         # Routing is looked up by the node just run, not the CC it ran. Values are

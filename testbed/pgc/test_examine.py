@@ -2,7 +2,7 @@
 The trace examiner reads the traces this runtime writes.
 
 It read RI-0's format — `execution_start`, `node_start`, `sequence` — and could not read one line
-PGC writes, and nothing said so until someone ran it. It now reads `SCHEMA_TRACE_EVENT_V1`, refuses
+PGC writes, and nothing said so until someone ran it. It now reads `SCHEMA_TRACE_EVENT_V2`, refuses
 anything else, and tells a completed run, refusals included, from a structural failure.
 """
 import json
@@ -13,13 +13,13 @@ from pathlib import Path
 from runtime.examine import TraceParseError, analyze
 
 WORKSPACE = Path(__file__).resolve().parents[3]
-HEADER = {"trace_schema_version": "v1", "event_type": "trace_classification",
+HEADER = {"trace_schema_version": "v2", "event_type": "trace_classification",
           "classified_by": "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V1",
           "snapshot_id": "abc", "determinative": [], "observational": [], "observational_keys": []}
 
 
 def ev(event_type, status=None, **detail):
-    return {"trace_schema_version": "v1", "trace_id": "T1", "event_type": event_type, "domain": "d",
+    return {"trace_schema_version": "v2", "trace_id": "T1", "event_type": event_type, "domain": "d",
             "wf_addr": 1, "cc_addr": None, "step_addr": None, "step_op": None,
             "result_status": status, "detail": detail, "ts_ns": 0}
 

@@ -42,19 +42,27 @@ class ExecutionContext:
 
     def resolve(self, path: str) -> Any:
         """
-        Resolve a binding path to its value.
+        Resolve a binding path to its value, or `ABSENT` when its source is not there.
 
         Supports:
             $.payload.<field>           — payload lookup (nested via dots)
             $.inputs.<field>            — same as $.payload.<field>
             $.results.<cc_addr>.<field> — previous CC result lookup
             <literal>                   — returned as-is
+
+        A value present as null is a value. A mapping leaves an absent key out; a list cannot, as
+        leaving a member out moves every member after it, so it refuses. A malformed path refuses.
         """
         if not isinstance(path, str):
             if isinstance(path, dict):
-                return {k: self.resolve(v) for k, v in path.items()}
+                resolved = {k: self.resolve(v) for k, v in path.items()}
+                return {k: v for k, v in resolved.items() if v is not ABSENT}
             if isinstance(path, (list, tuple)):
-                return [self.resolve(v) for v in path]
+                resolved = [self.resolve(v) for v in path]
+                if any(v is ABSENT for v in resolved):
+                    raise MalformedBindingError(
+                        f"a list binding {list(path)!r} names a source that is absent")
+                return resolved
             return path  # int, float, bool, None — returned as-is
 
         if path.startswith("$.payload."):
@@ -65,18 +73,14 @@ class ExecutionContext:
 
         if path.startswith("$.results."):
             # Format: $.results.<cc_addr>.<field>[.<nested>...]
-            after = path[len("$.results."):]
-            dot = after.find(".")
-            if dot < 0:
-                return None  # malformed path
-            try:
-                cc_addr = int(after[:dot])
-            except ValueError:
-                return None  # non-integer CC addr in path
-            field_path = after[dot + 1:]
-            surface = self._results.get(cc_addr)
+            addr, dot, field_path = path[len("$.results."):].partition(".")
+            if not addr.isdigit() or not dot or not field_path:
+                raise MalformedBindingError(
+                    f"{path!r} is not a path of the form $.results.<cc_addr>.<field>")
+            # A contract this run has not reached, on the route it took, is a source not there.
+            surface = self._results.get(int(addr))
             if surface is None:
-                return None
+                return ABSENT
             return _nested_get(surface, field_path)
 
         # Literal value
@@ -86,10 +90,10 @@ class ExecutionContext:
         """
         Resolve a full bindings dict → concrete input values.
 
-        Each value is a path string or a literal. Returns a plain dict
-        with the same keys and resolved values.
+        Each value is a path string or a literal. A binding whose source is absent is left out,
+        never set to None (`3c` RT-6).
         """
-        return {k: self.resolve(v) for k, v in bindings.items()}
+        return self.resolve(dict(bindings))
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -109,17 +113,30 @@ class ExecutionContext:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+class MalformedBindingError(ValueError):
+    """A workflow binding path the grammar does not admit, or a list naming an absent source."""
+
+
+class _Absent:
+    """A source that is not there. Distinct from None, which is a value present as null."""
+
+    def __repr__(self) -> str:
+        return "ABSENT"
+
+
+ABSENT: Any = _Absent()
+
+
 def _nested_get(obj: Any, dotted_key: str) -> Any:
     """
     Traverse a nested dict by a dot-separated key path.
 
     Example: _nested_get({"a": {"b": 3}}, "a.b") → 3
-    Returns None for any missing key.
+    Returns `ABSENT` for any missing key.
     """
-    parts = dotted_key.split(".")
     current = obj
-    for part in parts:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return ABSENT
+        current = current[part]
     return current
