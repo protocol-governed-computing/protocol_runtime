@@ -11,6 +11,7 @@ Skips when the governance surface's capability implementations are not importabl
 
 import json
 import multiprocessing
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,6 +63,7 @@ class CapabilityConcurrencyTest(unittest.TestCase):
 
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="pgc_cs_race_")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.ctx = multiprocessing.get_context("spawn")
 
     def _race(self, target, *extra) -> None:

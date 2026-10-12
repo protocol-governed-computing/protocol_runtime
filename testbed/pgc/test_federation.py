@@ -9,6 +9,7 @@ the compiled roots are absent.
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -66,6 +67,7 @@ class FederationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix="pgc_fed_"))
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, ignore_errors=True)
         cls.snapshot = cls.tmp / "snapshot"
         args = [sys.executable, "-m", "assembler.cli", "assemble", "--out", str(cls.snapshot),
                 "--profile", "SIGNED_FEDERATED_MULTINODE_PROFILE_V0"]
