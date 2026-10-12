@@ -144,7 +144,7 @@ Apache-2.0. See `LICENSE` and `NOTICE`.
 | `pgc-assembler` | `snapshot_assembler` | projections → sealed snapshot |
 | `pgc-runtime` | `protocol_runtime` | snapshot → governed execution |
 | `pgc-inspector` | `snapshot_inspector` | snapshot → read-only inspection |
-| `pgc-transformation` | `transformation` | change request → protocol artifacts |
+| `pgc-transformation` | `transformation_compilers` | change request → protocol artifacts |
 | `pgc-governance` | `software_governance` | the governance surface and its capability implementations |
 | `pgc-workloads` | `conformance_workloads` | the workloads that make conformance observable |
 | `pgc-domains` | `business_domains` | the business domain implementations the composed snapshot binds |
