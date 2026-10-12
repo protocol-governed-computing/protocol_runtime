@@ -27,8 +27,16 @@ def ev(event_type, status=None, **detail):
 START = ev("WF_START", wf_fqdn="d::WF_SUBMIT_V0", payload_keys=[])
 
 
+# One directory for every trace this module writes, removed when the module's tests finish.
+SCRATCH = tempfile.TemporaryDirectory(prefix="pgc_examine_")
+
+
+def tearDownModule():
+    SCRATCH.cleanup()
+
+
 def write(records) -> Path:
-    path = Path(tempfile.mkdtemp()) / "t.jsonl"
+    path = Path(tempfile.mkdtemp(dir=SCRATCH.name)) / "t.jsonl"
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
     return path
 
