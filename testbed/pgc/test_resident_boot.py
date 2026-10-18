@@ -1,11 +1,10 @@
 """
 A process verifies a snapshot once, and runs against it as often as it is asked.
 
-Every call to `run_workflow` used to boot afresh: the whole snapshot re-verified from its bytes, and
-the run's path drawn as a picture, on every run. Together they were over 95% of a run's time. A
-booted snapshot is now resident, keyed by its manifest and by what acceptance was judged against; a
-changed manifest is verified afresh, and a snapshot that no longer verifies is still refused. A run
-writes its evidence and nothing else: the picture is drawn on request.
+A booted snapshot is resident, keyed by its manifest and by what acceptance was judged against. A
+call to `run_workflow` does not re-verify the snapshot from its bytes; a changed manifest is
+verified afresh, and a snapshot that no longer verifies is refused. A run writes its evidence and
+nothing else: the picture of its path is drawn on request.
 """
 
 import json

@@ -91,9 +91,9 @@ def boot(snapshot_root: str | Path | None = None) -> BootedSnapshot:
 
     # 2. ACCEPTANCE — all four conditions of `3b` §7, established from content.
     #
-    # The runtime does not carry its own weaker copy of this. It previously recomputed the composite
-    # over the manifest's RECORDED per-domain hashes, which detects a tampered manifest and not a
-    # tampered constituent — and a snapshot with an edited projection booted and reported healthy.
+    # The runtime does not carry its own weaker copy of this. A composite over the manifest's RECORDED
+    # per-domain hashes detects a tampered manifest and not a tampered constituent: a snapshot with an
+    # edited projection would boot and report healthy.
     # `assembler.core.verify_snapshot` recomputes every constituent from its bytes; there is one
     # acceptance determination and both the assembler and the runtime reach it.
     #

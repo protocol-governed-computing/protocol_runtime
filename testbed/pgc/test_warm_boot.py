@@ -38,11 +38,9 @@ class WarmBootTest(unittest.TestCase):
     def test_manifest_states_one_identity(self):
         """The manifest states its identity twice; the two statements must agree.
 
-        This replaces a recompute-from-the-identity-view check. The runtime used to carry its own
-        composite over the manifest's RECORDED per-domain hashes — weaker than the assembler's,
-        which covers constituents and the claimed profile as well — so it could never match, and
-        the assertion had been red unnoticed because nothing ran this file. One determination has
-        one implementation (`assembler.core`), and what is checkable here is self-agreement.
+        One determination has one implementation (`assembler.core`), whose composite covers
+        constituents and the claimed profile. The runtime carries no copy of it, so what is
+        checkable here is self-agreement.
         """
         booted = boot(SNAPSHOT_ROOT)
         self.assertEqual(booted.manifest["composite_hash"], booted.manifest["snapshot_id"])

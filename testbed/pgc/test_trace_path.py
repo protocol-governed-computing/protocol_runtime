@@ -2,10 +2,9 @@
 The path drawn over a workflow's graph is the path the run took, place by place — and the drawing
 says why, as far as the inspector's explanation does.
 
-The overlay once matched `CC_COMPLETE` events to nodes by contract code. A node whose key is not its
-contract's code dropped out, and two places running one contract could not be told apart. Each
-routing event now names the node it left and the node or ending it reached. The renderer no longer
-reads the trace at all: it draws `si.execution.explain`, whose visits carry those routes.
+Each routing event names the node it left and the node or ending it reached, so a node whose key is
+not its contract's code is drawn, and two places running one contract are told apart. The renderer
+does not read the trace: it draws `si.execution.explain`, whose visits carry those routes.
 """
 import unittest
 

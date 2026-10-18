@@ -113,8 +113,8 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(CALLS["offer"], 0)
 
     def test_a_case_whose_inputs_are_absent_fails_as_a_fault_never_as_the_atoms_refusal(self):
-        # A path that reaches nothing used to hand the atom None, and the atom's refusal of None then
-        # passed a VIOLATION case. The runtime now refuses there; that is a fault, which fails any case.
+        # A path that reaches nothing is refused by the runtime, not handed to the atom as None, where
+        # the atom's refusal would pass a VIOLATION case. The refusal is a fault, which fails any case.
         absent = _case(CHOOSE, "refuses_without_inputs", _choose_ir(), {}, outcome="VIOLATION")
         result, _ = self._run([GOOD[0], absent])
         failed = [c for c in result.cases if not c.passed]
