@@ -4,7 +4,7 @@ Routing is a lookup with two answers: a step's outcome continues or exits, and n
 The dispatcher ended a contract on `exit` and read every other answer as going on. A contract whose
 step routed SUCCESS to an evaluation target — a condition nothing ran — ended with its last step's
 outcome whatever the condition said, and the Collatz gate could not fail. The build now refuses such a
-contract (`execution_topology::INVARIANT_TOPOLOGY_CONTRACT_CLOSED_V1`). Execution refuses too, so an
+contract (`execution_topology::INVARIANT_TOPOLOGY_CONTRACT_CLOSED_V0`). Execution refuses too, so an
 answer the build missed is never read as going on.
 
 Run:  python testbed/pgc/test_unknown_continuation.py

@@ -1,5 +1,5 @@
 """
-parser.py — reads a completed trace as `SCHEMA_TRACE_EVENT_V2` describes it.
+parser.py — reads a completed trace as `SCHEMA_TRACE_EVENT_V0` describes it.
 
 A trace is a classification header, then events sharing one envelope. This reader refuses any other
 shape rather than guessing at it: a reader that guessed could misread a trace and say nothing.

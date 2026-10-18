@@ -1,6 +1,6 @@
 """`FEDERATED_NODE` placement: a coordinator and workers on separately addressable nodes.
 
-`CONSTITUTION_EXECUTION_PLACEMENT_V1` §5a authorizes several nodes under one authority, with work
+`CONSTITUTION_EXECUTION_PLACEMENT_V0` §5a authorizes several nodes under one authority, with work
 reaching a node across a network. This package realizes that arrangement and nothing more. Every
 worker calls `run_workflow` exactly as a lone runtime would, against the same sealed snapshot, so a
 determination does not depend on which node reached it.

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 
-CLASSIFICATION_FQDN = "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V1"
+CLASSIFICATION_FQDN = "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V0"
 
 
 def _content_classification(snapshot_root: Path) -> dict[str, list[str]]:

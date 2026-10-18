@@ -1,7 +1,7 @@
 """
 The trace examiner reads the traces this runtime writes.
 
-It reads `SCHEMA_TRACE_EVENT_V2`, refuses anything else, and tells a completed run, refusals
+It reads `SCHEMA_TRACE_EVENT_V0`, refuses anything else, and tells a completed run, refusals
 included, from a structural failure.
 """
 import json
@@ -13,7 +13,7 @@ from runtime.examine import TraceParseError, analyze
 
 WORKSPACE = Path(__file__).resolve().parents[3]
 HEADER = {"trace_schema_version": "v2", "event_type": "trace_classification",
-          "classified_by": "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V1",
+          "classified_by": "vocabulary::VOCAB_EVIDENCE_CONTENT_CLASSIFICATION_V0",
           "snapshot_id": "abc", "determinative": [], "observational": [], "observational_keys": []}
 
 

@@ -6,7 +6,7 @@ the composition sealed it. This runs every case of one build and reports every t
 supplies as **proven** (every case ran and passed), **unproven** (no vector tests it) or **refused** (a
 case failed). It never reports success over nothing: a build with no vector is reported, by name, as
 unproven. The build is a domain's, or the platform's for the transforms the platform supplies.
-Governed by `conformance::CONSTITUTION_TEST_DATA_V2`.
+Governed by `conformance::CONSTITUTION_TEST_DATA_V0`.
 
 What a build supplies and what it only carries is read from the capabilities its attestation records
 as imported, never from a transform's name: a carried copy is byte-identical to its supplier's, and the

@@ -266,7 +266,7 @@ def execute_cc(
             raise UnknownContinuationError(
                 f"step {step_id!r} of {cc_fqdn} routes {result_status!r} to {action!r}; a "
                 f"continuation is continue or exit, and execution refuses rather than read anything "
-                f"else as going on (execution_topology::INVARIANT_TOPOLOGY_CONTRACT_CLOSED_V1)."
+                f"else as going on (execution_topology::INVARIANT_TOPOLOGY_CONTRACT_CLOSED_V0)."
             )
         if action == "exit":
             break

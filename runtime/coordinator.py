@@ -1,6 +1,6 @@
 """A coordinating party that runs several runtimes.
 
-`CONSTITUTION_EXECUTION_PLACEMENT_V1` authorizes `LOCAL_MULTI_WORKER`: more than one worker process
+`CONSTITUTION_EXECUTION_PLACEMENT_V0` authorizes `LOCAL_MULTI_WORKER`: more than one worker process
 on one host, each drawing work from a coordinating party and executing a governed topology in its
 own process. This is that party.
 
