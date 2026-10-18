@@ -1,5 +1,5 @@
 """
-verify_release.py — Pre-release gate for protocol_runtime (PGC v1.0.0).
+verify_release.py — Pre-release gate for protocol_runtime.
 
 Verifies the runtime package is releasable:
   - static:    clean import, no forbidden dependencies (pgs_*, omnibachi, structure),
@@ -209,7 +209,7 @@ def check_trace_schema():
 # ── Main ───────────────────────────────────────────────────────────────
 
 def main():
-    print("\n=== PGC protocol_runtime Release Verification (v1.0.0) ===")
+    print("\n=== PGC protocol_runtime Release Verification ===")
     print(f"  runtime root : {RUNTIME_ROOT}")
     print(f"  snapshot     : {SNAPSHOT_ROOT}")
 

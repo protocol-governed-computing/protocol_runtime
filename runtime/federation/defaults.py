@@ -1,6 +1,6 @@
 """Deployment defaults for the federated roles — the only defaults the runtime carries.
 
-Ruled deployment configuration, not behaviour (v5 ruling C2/C3). The sealed placement decides
+Ruled deployment configuration, not behaviour. The sealed placement decides
 *whether* execution is federated and how a unit is admitted, executed and evidenced; nothing here
 changes any of that. These say where a coordinator listens and how long a node waits to *connect*
 to one — facts about a deployment, which a snapshot sealed once and run on many deployments cannot

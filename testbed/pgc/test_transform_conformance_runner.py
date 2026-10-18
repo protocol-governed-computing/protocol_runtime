@@ -1,5 +1,5 @@
 """
-The transform conformance runner — the runtime's half of software_governance/dossiers/transform_conformance (held at the v5 tag).
+The transform conformance runner, in the runtime.
 
 A compiled build is laid out as its build leaves it: a build manifest, its attestation, its transforms,
 its vectors and the runnable cases the compiler wrote from them. Shown here: a molecule with a

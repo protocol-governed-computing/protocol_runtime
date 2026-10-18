@@ -64,9 +64,8 @@ parkinglot/
 .ipynb_checkpoints/
 
 # =========================
-# Claude Code (local only — never push)
+# Claude Code (local only)
 # =========================
-CLAUDE.md
 .claude/
 
 # =========================

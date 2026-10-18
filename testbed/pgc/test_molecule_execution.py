@@ -1,5 +1,5 @@
 """
-Molecule execution — the runtime's half of software_governance/dossiers/molecule_composition (held at the v5 tag).
+Molecule execution, in the runtime.
 
 A loop whose body is a molecule of two atoms is run the way the compiler seals it: an atom that
 offers candidate words and is declared not deterministic (it draws at random), and an atom that
