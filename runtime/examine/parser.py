@@ -2,8 +2,7 @@
 parser.py — reads a completed trace as `SCHEMA_TRACE_EVENT_V2` describes it.
 
 A trace is a classification header, then events sharing one envelope. This reader refuses any other
-shape rather than guessing at it: the examiner once read RI-0's trace format and could not read one
-line the PGC runtime writes, and nothing said so until someone ran it.
+shape rather than guessing at it: a reader that guessed could misread a trace and say nothing.
 
 Imports only json and pathlib.
 """

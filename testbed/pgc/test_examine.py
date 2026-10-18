@@ -1,9 +1,8 @@
 """
 The trace examiner reads the traces this runtime writes.
 
-It read RI-0's format — `execution_start`, `node_start`, `sequence` — and could not read one line
-PGC writes, and nothing said so until someone ran it. It now reads `SCHEMA_TRACE_EVENT_V2`, refuses
-anything else, and tells a completed run, refusals included, from a structural failure.
+It reads `SCHEMA_TRACE_EVENT_V2`, refuses anything else, and tells a completed run, refusals
+included, from a structural failure.
 """
 import json
 import tempfile

@@ -37,7 +37,7 @@ def _write_records(root: str, writer: int, start) -> None:
     start.wait()
     engine = MutableJsonEngine(_config(root, "RECORD", "records.json"))
     for i in range(EACH):
-        engine.write({"__pgs_store_entity__": "RECORD", "key": f"w{writer}-{i}", "value": {"n": i}})
+        engine.write({"__store_entity__": "RECORD", "key": f"w{writer}-{i}", "value": {"n": i}})
 
 
 def _claim_keys(root: str, writer: int, start, claimed) -> None:
@@ -55,7 +55,7 @@ def _append_records(root: str, writer: int, start) -> None:
     start.wait()
     engine = AppendOnlyJsonlEngine(_config(root, "LOG", "log.jsonl"))
     for i in range(EACH):
-        engine.append({"__pgs_store_entity__": "LOG", "record": {"writer": writer, "i": i}})
+        engine.append({"__store_entity__": "LOG", "record": {"writer": writer, "i": i}})
 
 
 @unittest.skipUnless(_HAVE_CAPABILITIES, "capability implementations not importable")

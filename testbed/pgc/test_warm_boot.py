@@ -4,9 +4,6 @@ PGC warm-boot tests — the runtime boots the assembled snapshot through its man
 
 These are the canonical PGC runtime tests. They require an assembled snapshot (produced by
 snapshot_assembler → the sibling ../snapshot). If none is present, they skip.
-
-Legacy RI-0 PGS-workspace execution tests (testbed/implementations/tests) are gated behind
-PGC_RI0_LEGACY=1 — they require a PGS workspace and a domain workflow the platform snapshot lacks.
 """
 
 import json

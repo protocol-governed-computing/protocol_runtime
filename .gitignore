@@ -74,6 +74,5 @@ CLAUDE.md
 # =========================
 
 # Snapshots copied locally for testing (not canonical)
-pgs_runtime/protocol_snapshot/
 protocol_snapshot_dev/
 protocol_snapshot_tmp/

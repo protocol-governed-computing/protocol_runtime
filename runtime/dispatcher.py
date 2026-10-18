@@ -276,7 +276,7 @@ def execute_cc(
     # field (e.g. CC_STORE_RESULTS receives sequences/all_terminate/non_terminating
     # as cc_inputs but only declares result_status in its outputs). Merging here
     # restores the expected surface without changing the pipeline contract.
-    _INTERNAL_KEYS = {"__store__", "__pgs_store_entity__"}
+    _INTERNAL_KEYS = {"__store__", "__store_entity__"}
     for key, value in cc_inputs.items():
         if key not in surface and key not in _INTERNAL_KEYS:
             surface[key] = value
@@ -478,11 +478,11 @@ def _execute_cs_step(
             cause=exc,
         ) from exc
 
-    # Translate __store__ (compiler-emitted entity tag) to __pgs_store_entity__ (CS protocol key)
+    # Translate __store__ (compiler-emitted entity tag) to __store_entity__ (CS protocol key)
     store_entity = resolved_inputs.get("__store__")
     cs_inputs = {k: v for k, v in resolved_inputs.items() if k != "__store__"}
     if store_entity:
-        cs_inputs["__pgs_store_entity__"] = store_entity
+        cs_inputs["__store_entity__"] = store_entity
 
     # The capability itself is external code. The CT path already wraps its atom call; this is the
     # same boundary, and it was the one place a domain exception could still reach the caller
