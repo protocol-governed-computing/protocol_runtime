@@ -176,15 +176,16 @@ assembler and the runtime alike.
 The full sequence, with the repositories it needs, is in
 [`pgc_install`](https://github.com/protocol-governed-computing/pgc_install).
 
-**Versioning.** Two schemes, and the published version follows the second.
+**Versioning.** Two numbers name two different things.
 
-- **Internal** — each repository's `VERSION` file, a monotonic composition ordinal. PGC versions the
-  composition rather than each repo: they release together and the governance closure forces lockstep,
-  so the ordinal names which composition a repo belongs to. Development happens on `dev/<N>` and each
-  cycle is tagged `release-<N>`. This is not published.
-- **Public** — `PUBLIC_VERSION`, tagged on every component repository. The platform is at **`v3`**.
+- **Published** — this distribution's `version` in `pyproject.toml`. It moves on its own. A release
+  that changes this repository bumps it, and a release that leaves the repository unchanged keeps it.
+- **Composition** — the public identity (`v6`, …) names one composition of the whole family.
+  `pgc_release` records which version of each distribution that composition holds, and `pgc_install`
+  pins exactly those versions.
 
-**The published version is the public one: `v4` is `4.0.0`.** The standard the packages implement is a
-separate artifact on its own track and is not this number.
+Each repository's `VERSION` file holds the workspace's cycle ordinal, which names the `dev/<N>`
+branch. It is development accounting, and it is never published. The standard the packages
+implement is a separate artifact on its own track, and none of these numbers is its revision.
 
 The standard these packages implement is published separately: https://doi.org/10.5281/zenodo.22150616
