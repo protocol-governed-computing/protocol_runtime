@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_molecule_execution import CALLS, _atom, _write_ct_ir  # noqa: E402  (registers the probe atoms)
 
-from runtime.conformance import run_domain, write_result
+from runtime.conformance import _undeclared_result, run_domain, write_result
 
 DOMAIN = "probe"
 WRITE = f"{DOMAIN}::CT_WRITE_V0"
@@ -189,6 +189,26 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result.proven, [])
         self.assertTrue(result.admitted)
         self.assertEqual(written["counts"]["proven"], 0)
+
+
+class DeclaredResultTest(unittest.TestCase):
+    """A completed result carries exactly the outputs the transform declares."""
+
+    IR = {"outputs": {"held": {"from": "__atom_result__"}, "reason": {"from": "__atom_result__"}}}
+
+    def test_a_result_carrying_exactly_its_declared_outputs_holds(self):
+        self.assertIsNone(_undeclared_result(self.IR, {"__atom_result__": {"held": True, "reason": ""}}))
+
+    def test_a_key_no_output_declares_refuses(self):
+        found = _undeclared_result(self.IR, {"__atom_result__": {"held": True, "reason": "", "result_status": "SUCCESS"}})
+        self.assertIn("undeclared ['result_status']", found)
+
+    def test_a_declared_output_the_result_lacks_refuses(self):
+        self.assertIn("lacks ['reason']", _undeclared_result(self.IR, {"__atom_result__": {"held": True}}))
+
+    def test_a_single_output_read_as_the_whole_value_holds(self):
+        ir = {"outputs": {"grouped": {"from": "__emitted__"}}}
+        self.assertIsNone(_undeclared_result(ir, {"__emitted__": {"fiction": [1], "poetry": [2]}}))
 
 
 if __name__ == "__main__":

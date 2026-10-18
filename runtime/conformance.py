@@ -201,6 +201,31 @@ def _resolve_outputs(ct_ir: dict[str, Any], vars_result: dict[str, Any]) -> dict
     return actual
 
 
+def _undeclared_result(ct_ir: dict[str, Any], vars_result: dict[str, Any]) -> str | None:
+    """Say how a completed run's result differs from the outputs the transform declares, if it does.
+
+    A result read field by field carries exactly the outputs read from it: a key no output names is an
+    answer nothing declared, and a declared output it lacks is one the case could only compare against
+    the whole result. A result read as one output's value is that value, whatever it holds.
+    """
+    groups: dict[str, set[str]] = {}
+    for output_key, output_spec in (ct_ir.get("outputs") or {}).items():
+        groups.setdefault(output_spec.get("from"), set()).add(output_key)
+    for from_var, keys in sorted(groups.items(), key=lambda g: str(g[0])):
+        if from_var not in vars_result:
+            return f"no step produced {from_var!r}, which outputs {sorted(keys)} are read from"
+        source = vars_result[from_var]
+        if not isinstance(source, dict) or not keys & set(source):
+            if len(keys) == 1:
+                continue
+            return f"{from_var!r} carries none of the declared outputs {sorted(keys)}"
+        if set(source) != keys:
+            missing, extra = sorted(keys - set(source)), sorted(set(source) - keys)
+            return (f"{from_var!r} differs from the declared outputs"
+                    f"{f' — lacks {missing}' if missing else ''}{f' — undeclared {extra}' if extra else ''}")
+    return None
+
+
 def _canonical(compiled: Path, kind_dir: str) -> list[dict[str, Any]]:
     folder = compiled / "canonical" / kind_dir
     return [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))] if folder.is_dir() else []
@@ -272,6 +297,9 @@ def _run_case(executor: CTExecutor, case: dict[str, Any]) -> CaseResult:
         if unused:
             return CaseResult(fqdn, False, f"recorded results no step used: {unused}")
 
+    undeclared = _undeclared_result(ct_ir, vars_result)
+    if undeclared:
+        return CaseResult(fqdn, False, f"result differs from the declared outputs: {undeclared}")
     actual = _resolve_outputs(ct_ir, vars_result)
     assertion_error = _assert_structural(actual, assertions) if assertions else None
     if assertion_error:
