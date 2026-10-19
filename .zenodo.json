@@ -1,0 +1,33 @@
+{
+  "upload_type": "software",
+  "title": "PGC Reference Implementation: Protocol Runtime (protocol_runtime)",
+  "description": "<p>Deterministic execution engine. Traverses a precompiled execution graph and produces traceable governed outcomes. Determines no new governed behavior at runtime; execution is a traversal of what the sealed snapshot already declares.</p><p>Part of the Protocol-Governed Computing reference corpus. Cite the version DOI of the release you used, not the concept DOI.</p>",
+  "creators": [
+    {
+      "name": "Ganti, Bhash",
+      "orcid": "0009-0007-3810-6520",
+      "affiliation": "Independent researcher"
+    }
+  ],
+  "license": "Apache-2.0",
+  "keywords": [
+    "protocol-governed computing",
+    "governance",
+    "declarative semantics",
+    "conformance",
+    "deterministic execution",
+    "runtime",
+    "traversal"
+  ],
+  "access_right": "open",
+  "language": "eng",
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.22150616",
+      "relation": "references",
+      "resource_type": "software",
+      "scheme": "doi"
+    }
+  ],
+  "notes": "Implements or supports the Open PGC Standard (10.5281/zenodo.22150616). Version is taken from the GitHub release tag; do not hard-code it here."
+}
