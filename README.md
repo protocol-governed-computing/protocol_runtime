@@ -188,4 +188,4 @@ Each repository's `VERSION` file holds the workspace's cycle ordinal, which name
 branch. It is development accounting, and it is never published. The standard the packages
 implement is a separate artifact on its own track, and none of these numbers is its revision.
 
-The standard these packages implement is published separately: https://doi.org/10.5281/zenodo.22150616
+The standard these packages implement is published separately: https://doi.org/10.5281/zenodo.22150615

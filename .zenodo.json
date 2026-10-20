@@ -23,11 +23,11 @@
   "language": "eng",
   "related_identifiers": [
     {
-      "identifier": "10.5281/zenodo.22150616",
+      "identifier": "10.5281/zenodo.23486349",
       "relation": "references",
       "resource_type": "software",
       "scheme": "doi"
     }
   ],
-  "notes": "Implements or supports the Open PGC Standard (10.5281/zenodo.22150616). Version is taken from the GitHub release tag; do not hard-code it here."
+  "notes": "Implements or supports the Open PGC Standard (10.5281/zenodo.22150615). Version is taken from the GitHub release tag; do not hard-code it here."
 }

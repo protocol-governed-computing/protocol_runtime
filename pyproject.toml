@@ -42,7 +42,7 @@ protocol_runtime = "runtime.cli:main"
 [project.urls]
 Homepage = "https://omnibachi.org/"
 Repository = "https://github.com/protocol-governed-computing/protocol_runtime"
-Standard = "https://doi.org/10.5281/zenodo.22150616"
+Standard = "https://doi.org/10.5281/zenodo.22150615"
 
 [tool.setuptools]
 include-package-data = false
