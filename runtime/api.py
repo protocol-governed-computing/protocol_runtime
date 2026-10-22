@@ -78,8 +78,8 @@ def run_workflow(
         writer.error(str(exc))
         raise
     finally:
-        # The JSONL is the evidence. A picture of the path is a view of it, drawn on request
-        # (`run --behavior-logic`, or `behavior-logic <trace>`), never as a cost of every run.
+        # The JSONL is the evidence. A drawing of the path is a view of it, made by the inspector
+        # on request, never by the runtime and never as a cost of every run.
         writer.close()
 
     return RunResult(status=status, surface=surface or {}, trace_id=trace_id, trace_dir=trace_dir)

@@ -4,7 +4,6 @@ cli.py — Token-native CLI entry point for the runtime.
 Commands:
     run           — Execute a workflow against the tokenized snapshot.
     examine       — Analyze a completed trace file and print a diagnostic report.
-    behavior-logic — Render a completed trace, explained, over its workflow graph (PNG).
 
 Execution path (run):
     1. Load tokenized snapshot for the domain via loader.load_domain()
@@ -13,7 +12,6 @@ Execution path (run):
     3. Open TraceWriter at traces/<domain>/<wf_code>/<trace_id>/
     4. Drive workflow topology via scheduler.run_wf()
     5. Print result summary; exit 1 on non-SUCCESS
-    6. If --behavior-logic: render the explained run as a PNG (trace_viz, a client of the inspector)
 
 All runtime behavior comes from the compiled tokenized_snapshot.
 The CLI does not implement any domain logic.
@@ -72,14 +70,6 @@ def _build_parser() -> argparse.ArgumentParser:
              "Default: sibling ../snapshot",
     )
 
-    # ── run: optional behavior-logic flag ────────────────────────
-    run_p.add_argument(
-        "--behavior-logic",
-        action="store_true",
-        dest="behavior_logic",
-        help="Render execution-path PNG after run (requires graphviz)",
-    )
-
     # ── replay ────────────────────────────────────────────────────
     rp_p = subs.add_parser(
         "replay",
@@ -134,23 +124,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "trace_file",
         metavar="FILE",
         help="Path to a completed .jsonl trace file",
-    )
-
-    # ── behavior-logic ────────────────────────────────────────────
-    bl_p = subs.add_parser(
-        "behavior-logic",
-        help="Render execution-path PNG from a completed trace file",
-    )
-    bl_p.add_argument(
-        "trace_file",
-        metavar="FILE",
-        help="Path to a completed .jsonl trace file",
-    )
-    bl_p.add_argument(
-        "--snapshot",
-        metavar="PATH",
-        help="Absolute path to the assembled snapshot the trace ran against "
-             "(or set PGC_SNAPSHOT_ROOT; default: the sibling ../snapshot)",
     )
 
     return parser
@@ -208,12 +181,6 @@ def _handle_run(args: argparse.Namespace) -> None:
     print(f"[runtime] Trace dir: {trace_dir}")
     print()
 
-    # Evidence projection: render execution-path PNG if requested
-    trace_path = trace_dir / f"{trace_id}.jsonl"
-    png_path = None
-    if args.behavior_logic:
-        png_path = _render_behavior_logic(snapshot_root, trace_path, trace_root=data_root)
-
     print("=" * 60)
     print("[runtime] Workflow Complete")
     print("=" * 60)
@@ -224,10 +191,6 @@ def _handle_run(args: argparse.Namespace) -> None:
     if surface:
         print("Output:")
         print(_format_surface(surface))
-    if png_path:
-        print(f"Graph:      {png_path}")
-    elif args.behavior_logic:
-        print("Graph:      (graphviz not available — PNG skipped)")
     print("=" * 60)
 
     if result_status not in ("SUCCESS", "ALREADY_EXISTS"):
@@ -341,27 +304,6 @@ def _health_line(snapshot_root: Path, booted) -> str:
     return f"[runtime] ✓ Snapshot healthy — {n} domain(s) resident and hash-verified{gov}. No issues."
 
 
-def _handle_behavior_logic(args: argparse.Namespace) -> None:
-    trace_path = Path(args.trace_file)
-    if not trace_path.exists():
-        _fatal(f"Trace file not found: {args.trace_file}")
-
-    snapshot_str = args.snapshot or os.environ.get("PGC_SNAPSHOT_ROOT")
-    snapshot_root = Path(snapshot_str) if snapshot_str else default_snapshot_root()
-    if not snapshot_root.is_absolute():
-        _fatal(f"--snapshot must be an absolute path, got: {snapshot_str}")
-
-    png_path = _render_behavior_logic(snapshot_root, trace_path)
-    if png_path:
-        print(f"[runtime] Execution path PNG: {png_path}")
-    else:
-        print(
-            "[runtime] Behavior logic render skipped — graphviz (dot) not available.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-
 def _handle_examine(args: argparse.Namespace) -> None:
     trace_path = Path(args.trace_file)
     if not trace_path.exists():
@@ -390,21 +332,6 @@ def _handle_examine(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
-
-def _render_behavior_logic(snapshot_root: Path, trace_path: Path,
-                           trace_root: Path | None = None) -> "Path | None":
-    """Render the explained run as a PNG. Best-effort: a refusal is reported, never drawn around."""
-    from runtime.trace_viz import render_trace_png
-    try:
-        return render_trace_png(snapshot_root, trace_path, trace_root=trace_root)
-    except ModuleNotFoundError as exc:
-        print(f"[runtime] Behavior logic render needs the snapshot inspector "
-              f"(pgc-runtime[render]): {exc}", file=sys.stderr)
-        return None
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"[runtime] Behavior logic render error: {exc}", file=sys.stderr)
-        return None
-
 
 def _load_payload(payload_path: str | None) -> dict:
     if not payload_path:
@@ -500,8 +427,6 @@ def main() -> None:
         _handle_worker(args)
     elif args.command == "examine":
         _handle_examine(args)
-    elif args.command == "behavior-logic":
-        _handle_behavior_logic(args)
 
 
 if __name__ == "__main__":

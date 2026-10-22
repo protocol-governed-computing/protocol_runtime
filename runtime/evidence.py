@@ -19,8 +19,8 @@ The trace file is written to:
 
 subdomain is not known to this module — caller passes the full trace dir path.
 
-This module produces the raw JSONL evidence only. Evidence projection
-(execution-path PNG overlay) is handled separately in trace_viz.py.
+This module produces the raw JSONL evidence only. A reader draws a run from it through the
+inspector: its workflow page marks the path `si.execution.explain` gives (`/workflow/?trace=`).
 """
 
 from __future__ import annotations
